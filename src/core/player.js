@@ -40,9 +40,10 @@ export class Player {
     this.facing = this.yaw;
     this.invuln = 0;
 
-    this.drainWalk = 0.045;
-    this.drainRun = 0.11;
-    this.regenStill = 0.08;
+    this.drainWalk = 0; // walking does not drain — regenerates like standing
+    this.drainRun = 0.12;
+    this.regenWalk = 0.09; // recharge while walking / idle (anything except sprint)
+    this.regenStill = 0.09;
 
     this.shake = 0;
     this.hitFlash = 0;
@@ -275,10 +276,11 @@ export class Player {
     this.pos.y += (targetY - this.pos.y) * (1 - Math.exp(-18 * dt));
 
     const moving = Math.hypot(this.vel.x, this.vel.z);
-    if (moving > 0.4) {
-      this.energy = Math.max(0, this.energy - (wantRun ? this.drainRun : this.drainWalk) * dt);
+    // Energy: sprint drains; walk and stand both recharge
+    if (wantRun && moving > 0.35) {
+      this.energy = Math.max(0, this.energy - this.drainRun * dt);
     } else {
-      this.energy = Math.min(this.maxEnergy, this.energy + this.regenStill * dt);
+      this.energy = Math.min(this.maxEnergy, this.energy + this.regenWalk * dt);
     }
 
     this.bob += dt * moving * (wantRun ? 8.2 : 6.4);

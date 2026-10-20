@@ -166,8 +166,8 @@ function beginPlay({ online = false } = {}) {
   controls.setVisible(true);
   controls.lock();
   hud.setHint(controls.mobile
-    ? '<b>Stick</b> move · <b>RUN</b> sprint · drag to orbit'
-    : '<b>WASD</b> walk · <b>Shift</b> run · mouse orbit');
+    ? '<b>Stick</b> walk (recharges) · <b>RUN</b> drains · drag orbit'
+    : '<b>WASD</b> walk recharges · <b>Shift</b> run drains · mouse orbit');
 }
 
 function startRun(name) {

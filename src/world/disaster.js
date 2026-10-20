@@ -27,17 +27,20 @@ export function createDisaster(world, opts = {}) {
   const rng = rngKit(seed + 99);
   const buildings = world.buildings;
   let elapsed = 0;
-  let nextEventAt = 8;
+  let nextEventAt = 5; // first readable hazard sooner
   let eventIndex = 0;
   const debris = [];
   const drops = []; // { shadow, mesh?, x,z, radius, t0, telegraph, phase, spin, matSize }
 
-  const voidMat = flat({ color: PAL.voidDeep, fog: true });
-  const voidWallMat = flat({ color: PAL.crack, fog: true });
-  const voidInnerMat = flat({ color: PAL.voidRim, fog: true });
-  const rimMat = cel({ color: PAL.concreteDark, bands: 3, tint: 0x3a3028 });
-  const lipMat = cel({ color: PAL.voidLip, bands: 2, tint: 0x2a2420 });
+  // Pitch-black void materials — fog OFF + toneMapped OFF so grade can't wash them gray
+  const voidMat = flat({ color: 0x000000, fog: false, toneMapped: false });
+  const voidNearMat = flat({ color: 0x050508, fog: false, toneMapped: false });
+  const voidMidMat = flat({ color: 0x0a0a0e, fog: false, toneMapped: false });
+  // Bright lip so the hole edge pops against asphalt
+  const rimMat = cel({ color: 0xe8e2d8, bands: 3, tint: 0x6a6058 });
+  const lipMat = cel({ color: 0xc8c0b4, bands: 2, tint: 0x5a5048 });
   const rubbleMat = cel({ color: PAL.rubble, bands: 3, tint: 0x5a5048 });
+  const inkEdge = flat({ color: 0x000000, fog: false, toneMapped: false });
   const shadowMatBase = flat({
     color: 0x050508,
     transparent: true,
@@ -101,70 +104,88 @@ export function createDisaster(world, opts = {}) {
     return null;
   }
 
-  /** Black void fissure — deep pit, dark inner, cracked rim/lip (not gray decal). */
+  /**
+   * Unmistakable black hole in the ground:
+   * open pitch-black shaft (fog/grade bypass), stepped walls for depth,
+   * bright concrete rim so it reads against asphalt at a glance.
+   */
   function makeFissureVisual(w, depth, x, z) {
     const g = new THREE.Group();
     g.position.set(x, 0, z);
     g.name = 'fissure';
 
-    // Surface void plate — kills any leftover gray road under the hole
-    const mouth = box(w * 0.98, 0.06, depth * 0.98, voidMat, 0, -0.02, 0);
+    const hw = w * 0.5;
+    const hd = depth * 0.5;
+    const shaftH = 3.2;
+
+    // Mouth: solid pitch-black lid slightly below road so cut edges don't flash gray
+    const mouth = box(w * 1.02, 0.08, depth * 1.02, voidMat, 0, -0.04, 0);
     mouth.receiveShadow = false;
+    mouth.castShadow = false;
     g.add(mouth);
 
-    // Deep shaft
-    const shaft = box(w * 0.9, 2.4, depth * 0.9, voidWallMat, 0, -1.22, 0);
-    g.add(shaft);
-
-    // Inner recess (slightly smaller, darker) for depth cue
-    const inner = box(w * 0.72, 1.6, depth * 0.72, voidInnerMat, 0, -1.35, 0);
-    g.add(inner);
-
-    // Bottom abyss
-    g.add(box(w * 0.68, 0.1, depth * 0.68, voidMat, 0, -2.35, 0));
-
-    // Stepped ledge inside for depth readability
-    g.add(box(w * 0.82, 0.12, depth * 0.82, voidInnerMat, 0, -0.55, 0));
-    g.add(box(w * 0.62, 0.1, depth * 0.62, voidMat, 0, -1.05, 0));
-
-    // Radial crack spokes from the mouth (ink-readable edge breaks)
-    const crackMat = flat({ color: 0x060608, fog: true, toneMapped: false });
-    for (let i = 0; i < 5; i++) {
-      const ang = (i / 5) * Math.PI * 2 + rng.range(-0.2, 0.2);
-      const len = rng.range(0.55, 1.15);
-      const spoke = box(len, 0.05, 0.12, crackMat,
-        Math.cos(ang) * (w * 0.42 + len * 0.35),
-        0.03,
-        Math.sin(ang) * (depth * 0.42 + len * 0.35));
-      spoke.rotation.y = ang;
-      g.add(spoke);
+    // Open shaft walls (thin boxes lining the pit — you look INTO black)
+    const wallT = 0.12;
+    const wallY = -shaftH * 0.5;
+    const north = box(w + wallT * 2, shaftH, wallT, voidNearMat, 0, wallY, -hd - wallT * 0.5);
+    const south = box(w + wallT * 2, shaftH, wallT, voidNearMat, 0, wallY, hd + wallT * 0.5);
+    const west = box(wallT, shaftH, depth, voidNearMat, -hw - wallT * 0.5, wallY, 0);
+    const east = box(wallT, shaftH, depth, voidNearMat, hw + wallT * 0.5, wallY, 0);
+    for (const wall of [north, south, west, east]) {
+      wall.receiveShadow = false;
+      wall.castShadow = false;
+      g.add(wall);
     }
 
-    // Jagged rim / debris lip around the mouth
-    const rimBits = 9 + rng.int(0, 4);
+    // Stepped inner ledges (smaller → darker) for vertical depth falloff
+    g.add(box(w * 0.88, 0.14, depth * 0.88, voidMidMat, 0, -0.7, 0));
+    g.add(box(w * 0.72, 0.14, depth * 0.72, voidNearMat, 0, -1.45, 0));
+    g.add(box(w * 0.55, 0.14, depth * 0.55, voidMat, 0, -2.2, 0));
+
+    // Abyss floor — absolute black
+    const floor = box(w * 0.95, 0.2, depth * 0.95, voidMat, 0, -shaftH + 0.05, 0);
+    floor.receiveShadow = false;
+    g.add(floor);
+
+    // Rectangular ink outline flush with road — hard silhouette of the opening
+    const edgeH = 0.06;
+    const edgeY = 0.035;
+    const outline = [
+      box(w + 0.28, edgeH, 0.14, inkEdge, 0, edgeY, -hd - 0.06),
+      box(w + 0.28, edgeH, 0.14, inkEdge, 0, edgeY, hd + 0.06),
+      box(0.14, edgeH, depth + 0.28, inkEdge, -hw - 0.06, edgeY, 0),
+      box(0.14, edgeH, depth + 0.28, inkEdge, hw + 0.06, edgeY, 0),
+    ];
+    for (const e of outline) g.add(e);
+
+    // Bright raised concrete rim — contrast against black void + gray road
+    const rimBits = 10 + rng.int(0, 3);
     for (let i = 0; i < rimBits; i++) {
       const t = i / rimBits;
-      const ang = t * Math.PI * 2 + rng.range(-0.12, 0.12);
-      const rx = Math.cos(ang) * (w * 0.48 + rng.range(-0.08, 0.18));
-      const rz = Math.sin(ang) * (depth * 0.48 + rng.range(-0.08, 0.18));
-      const bw = rng.range(0.28, 0.55);
-      const bd = rng.range(0.22, 0.48);
-      const bh = rng.range(0.07, 0.18);
-      const chip = box(bw, bh, bd, i % 3 === 0 ? lipMat : rimMat, rx, bh * 0.45, rz);
-      chip.rotation.y = ang + rng.range(-0.4, 0.4);
+      const ang = t * Math.PI * 2 + rng.range(-0.1, 0.1);
+      // Place on the ellipse perimeter of the hole
+      const rx = Math.cos(ang) * (hw + rng.range(0.05, 0.22));
+      const rz = Math.sin(ang) * (hd + rng.range(0.05, 0.22));
+      const bw = rng.range(0.32, 0.62);
+      const bd = rng.range(0.26, 0.5);
+      const bh = rng.range(0.1, 0.22);
+      const chip = box(bw, bh, bd, i % 2 === 0 ? rimMat : lipMat, rx, bh * 0.5, rz);
+      chip.rotation.y = ang + rng.range(-0.35, 0.35);
       chip.castShadow = true;
       chip.receiveShadow = true;
       g.add(chip);
-      if (i % 2 === 0) hullOutline(chip, { thickness: 0.0032, color: PAL.ink });
+      hullOutline(chip, { thickness: 0.0034, color: PAL.ink });
     }
 
-    // A few rubble chunks on the lip
-    for (let i = 0; i < 4; i++) {
+    // Rubble on the lip
+    for (let i = 0; i < 5; i++) {
       const ang = rng.range(0, Math.PI * 2);
-      const rr = rng.range(0.35, 0.55) * Math.max(w, depth) * 0.5;
-      const s = rng.range(0.12, 0.28);
+      const rr = Math.max(hw, hd) + rng.range(0.15, 0.4);
+      const s = rng.range(0.14, 0.3);
       const chunk = box(s, s * 0.7, s * 0.85, rubbleMat,
-        Math.cos(ang) * rr, s * 0.35, Math.sin(ang) * rr);
+        Math.cos(ang) * rr * (hw / Math.max(hw, hd)),
+        s * 0.4,
+        Math.sin(ang) * rr * (hd / Math.max(hw, hd)));
       chunk.rotation.set(rng.range(-0.4, 0.4), ang, rng.range(-0.3, 0.3));
       chunk.castShadow = true;
       g.add(chunk);
@@ -180,8 +201,8 @@ export function createDisaster(world, opts = {}) {
       const { x, z } = spot;
       if (world.holes.some((h) => Math.hypot(h.x - x, h.z - z) < 4)) continue;
 
-      const w = rng.range(1.5, 2.8);
-      const d = rng.range(2.4, 4.8);
+      const w = rng.range(2.2, 3.6);
+      const d = rng.range(3.0, 5.4);
       const hole = {
         x, z, w, d,
         x0: x - w / 2, x1: x + w / 2,
@@ -345,7 +366,8 @@ export function createDisaster(world, opts = {}) {
     const roll = rng.next();
     // Weight toward falling drops mid/late; fissures early; collapses sprinkled
     if (eventIndex < 2) {
-      if (roll < 0.55) return spawnFissure();
+      // First hazards favor readable black holes
+      if (roll < 0.72) return spawnFissure();
       return spawnFallingDrop(1);
     }
     if (roll < 0.34) return spawnFallingDrop(1 + (d > 0.55 && rng.chance(0.55) ? 1 : 0));

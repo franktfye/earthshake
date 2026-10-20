@@ -78,13 +78,13 @@ export function createHud() {
         </label>
         <p class="name-error start-only" hidden></p>
         <div class="control-strip desktop-only">
-          <span><b>WASD</b> Move</span>
-          <span><b>Shift</b> Run</span>
+          <span><b>WASD</b> Walk (recharges)</span>
+          <span><b>Shift</b> Run (drains)</span>
           <span><b>Mouse</b> Orbit</span>
         </div>
         <div class="control-strip mobile-only">
-          <span><b>Stick</b> Move</span>
-          <span><b>RUN</b> Sprint</span>
+          <span><b>Stick</b> Walk (recharges)</span>
+          <span><b>RUN</b> Drains</span>
           <span><b>Drag</b> Orbit</span>
         </div>
         <button class="menu-action" type="button">
