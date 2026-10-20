@@ -9,6 +9,7 @@ import { createControls } from './core/controls.js';
 import { buildWorld, WORLD_SEED } from './world/index.js';
 import { createNetClient } from './net/client.js';
 import { createRemoteManager } from './net/remotes.js';
+import { createBgm } from './core/bgm.js';
 
 const HS_KEY = 'aftershock-best';
 
@@ -70,6 +71,18 @@ const player = new Player(camera, canvas, world, controls, {
 const hud = createHud();
 hud.setMobile(controls.mobile);
 controls.setVisible(false);
+
+const bgm = createBgm();
+hud.setMuted(bgm.muted);
+hud.onMuteToggle = () => {
+  const muted = bgm.toggleMute();
+  hud.setMuted(muted);
+};
+bgm.onChange(({ muted }) => hud.setMuted(muted));
+// Unlock audio on first pointer gesture (autoplay policy)
+const unlockAudio = () => bgm.unlock();
+window.addEventListener('pointerdown', unlockAudio, { passive: true });
+window.addEventListener('keydown', unlockAudio);
 
 const remotes = createRemoteManager(scene, camera);
 
@@ -165,6 +178,7 @@ function beginPlay({ online = false } = {}) {
   hud.showPlaying();
   controls.setVisible(true);
   controls.lock();
+  bgm.start();
   hud.setHint(controls.mobile
     ? '<b>Stick</b> walk (recharges) · <b>RUN</b> drains · drag orbit'
     : '<b>WASD</b> walk recharges · <b>Shift</b> run drains · mouse orbit');

@@ -14,6 +14,19 @@ export function createHud() {
   };
 
   const root = el('div', 'hud');
+  const topBar = el('div', 'top-bar', root, `
+    <button type="button" class="mute-btn" aria-label="Mute music" title="Mute / unmute BGM">
+      <span class="mute-icon" aria-hidden="true">♪</span>
+      <span class="mute-label">Sound</span>
+    </button>
+  `);
+  const muteBtn = topBar.querySelector('.mute-btn');
+  let onMuteToggle = null;
+  muteBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    onMuteToggle?.();
+  });
+
   const vitals = el('div', 'vitals', root, `
     <div class="lives-row" aria-label="Lives">
       <span class="heart on" data-i="0"></span>
@@ -201,12 +214,23 @@ export function createHud() {
     if (netStatus) netStatus.textContent = text || '';
   }
 
+  function setMuted(muted) {
+    muteBtn.classList.toggle('is-muted', !!muted);
+    muteBtn.setAttribute('aria-label', muted ? 'Unmute music' : 'Mute music');
+    muteBtn.title = muted ? 'Unmute BGM' : 'Mute BGM';
+    const label = muteBtn.querySelector('.mute-label');
+    const icon = muteBtn.querySelector('.mute-icon');
+    if (label) label.textContent = muted ? 'Muted' : 'Sound';
+    if (icon) icon.textContent = muted ? '✕' : '♪';
+  }
+
   function getName() {
     return sanitizeName(nameInput?.value || savedName);
   }
 
   return {
     set onStart(fn) { onStart = fn; },
+    set onMuteToggle(fn) { onMuteToggle = fn; },
     setMobile,
     showStart,
     showPlaying,
@@ -217,6 +241,7 @@ export function createHud() {
     flash,
     setHint,
     setNetStatus,
+    setMuted,
     getName,
   };
 }
