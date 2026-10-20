@@ -118,15 +118,20 @@ export function createDisaster(world, opts = {}) {
     const hd = depth * 0.5;
     const shaftH = 3.2;
 
-    // Mouth: solid pitch-black lid slightly below road so cut edges don't flash gray
-    const mouth = box(w * 1.02, 0.08, depth * 1.02, voidMat, 0, -0.04, 0);
+    // Mouth MUST sit above the road mesh (road is continuous; cut is physics-only)
+    // Thick pitch-black plug so asphalt never shows through
+    const mouth = box(w * 1.04, 0.22, depth * 1.04, voidMat, 0, 0.02, 0);
     mouth.receiveShadow = false;
     mouth.castShadow = false;
+    mouth.renderOrder = 2;
     g.add(mouth);
 
-    // Open shaft walls (thin boxes lining the pit — you look INTO black)
-    const wallT = 0.12;
-    const wallY = -shaftH * 0.5;
+    // Secondary deeper black slab for depth under the mouth
+    g.add(box(w * 0.96, 0.5, depth * 0.96, voidNearMat, 0, -0.35, 0));
+
+    // Open shaft walls going down (look into the pit)
+    const wallT = 0.14;
+    const wallY = -shaftH * 0.5 - 0.1;
     const north = box(w + wallT * 2, shaftH, wallT, voidNearMat, 0, wallY, -hd - wallT * 0.5);
     const south = box(w + wallT * 2, shaftH, wallT, voidNearMat, 0, wallY, hd + wallT * 0.5);
     const west = box(wallT, shaftH, depth, voidNearMat, -hw - wallT * 0.5, wallY, 0);
@@ -137,26 +142,29 @@ export function createDisaster(world, opts = {}) {
       g.add(wall);
     }
 
-    // Stepped inner ledges (smaller → darker) for vertical depth falloff
-    g.add(box(w * 0.88, 0.14, depth * 0.88, voidMidMat, 0, -0.7, 0));
-    g.add(box(w * 0.72, 0.14, depth * 0.72, voidNearMat, 0, -1.45, 0));
-    g.add(box(w * 0.55, 0.14, depth * 0.55, voidMat, 0, -2.2, 0));
+    // Stepped inner ledges (smaller → blacker) for vertical depth falloff
+    g.add(box(w * 0.86, 0.16, depth * 0.86, voidMidMat, 0, -0.85, 0));
+    g.add(box(w * 0.68, 0.16, depth * 0.68, voidNearMat, 0, -1.55, 0));
+    g.add(box(w * 0.5, 0.16, depth * 0.5, voidMat, 0, -2.3, 0));
 
     // Abyss floor — absolute black
-    const floor = box(w * 0.95, 0.2, depth * 0.95, voidMat, 0, -shaftH + 0.05, 0);
+    const floor = box(w * 0.95, 0.25, depth * 0.95, voidMat, 0, -shaftH, 0);
     floor.receiveShadow = false;
     g.add(floor);
 
-    // Rectangular ink outline flush with road — hard silhouette of the opening
-    const edgeH = 0.06;
-    const edgeY = 0.035;
+    // Hard black outline on top of asphalt around the mouth
+    const edgeH = 0.07;
+    const edgeY = 0.12;
     const outline = [
-      box(w + 0.28, edgeH, 0.14, inkEdge, 0, edgeY, -hd - 0.06),
-      box(w + 0.28, edgeH, 0.14, inkEdge, 0, edgeY, hd + 0.06),
-      box(0.14, edgeH, depth + 0.28, inkEdge, -hw - 0.06, edgeY, 0),
-      box(0.14, edgeH, depth + 0.28, inkEdge, hw + 0.06, edgeY, 0),
+      box(w + 0.36, edgeH, 0.16, inkEdge, 0, edgeY, -hd - 0.08),
+      box(w + 0.36, edgeH, 0.16, inkEdge, 0, edgeY, hd + 0.08),
+      box(0.16, edgeH, depth + 0.36, inkEdge, -hw - 0.08, edgeY, 0),
+      box(0.16, edgeH, depth + 0.36, inkEdge, hw + 0.08, edgeY, 0),
     ];
-    for (const e of outline) g.add(e);
+    for (const e of outline) {
+      e.renderOrder = 3;
+      g.add(e);
+    }
 
     // Bright raised concrete rim — contrast against black void + gray road
     const rimBits = 10 + rng.int(0, 3);
@@ -365,9 +373,12 @@ export function createDisaster(world, opts = {}) {
     const d = difficulty();
     const roll = rng.next();
     // Weight toward falling drops mid/late; fissures early; collapses sprinkled
-    if (eventIndex < 2) {
-      // First hazards favor readable black holes
-      if (roll < 0.72) return spawnFissure();
+    if (eventIndex <= 1) {
+      // First hazard is always a black hole so it is unmistakable
+      return spawnFissure();
+    }
+    if (eventIndex === 2) {
+      if (roll < 0.55) return spawnFissure();
       return spawnFallingDrop(1);
     }
     if (roll < 0.34) return spawnFallingDrop(1 + (d > 0.55 && rng.chance(0.55) ? 1 : 0));
