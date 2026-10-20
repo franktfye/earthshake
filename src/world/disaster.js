@@ -37,10 +37,26 @@ export function createDisaster(world, opts = {}) {
   let holeSeq = 0;
   const holeMeshes = new Map(); // holeId → group
 
-  // Pitch-black void (unlit, no fog/grade) — walls + floor must stay black
-  const voidMat = flat({ color: 0x000000, fog: false, toneMapped: false, side: THREE.DoubleSide });
-  const voidNearMat = flat({ color: 0x050506, fog: false, toneMapped: false, side: THREE.DoubleSide });
-  const voidStepMat = flat({ color: 0x0a0a0c, fog: false, toneMapped: false, side: THREE.DoubleSide });
+  // Forced pitch-black abyss (raw shader — immune to lights / fog / color mgmt)
+  const abyssMat = new THREE.ShaderMaterial({
+    vertexShader: /* glsl */ `
+      void main() {
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      void main() {
+        gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+      }
+    `,
+    side: THREE.DoubleSide,
+    fog: false,
+    toneMapped: false,
+    depthWrite: true,
+  });
+  const voidMat = abyssMat;
+  const voidNearMat = abyssMat;
+  const voidStepMat = abyssMat;
   // Bright lip only — contrast against black hole + asphalt
   const rimMat = cel({ color: 0xf0ebe3, bands: 3, tint: 0x6a6058 });
   const lipMat = cel({ color: 0xd4cdc2, bands: 2, tint: 0x5a5048 });
@@ -363,68 +379,61 @@ export function createDisaster(world, opts = {}) {
     const segs = 48;
 
     if (kind === 'circle') {
-      // 1) Opaque black cover ABOVE road — hides asphalt in the opening
+      // Raised crater entirely ABOVE asphalt so road never shows through.
+      // Stepped shelves + vertical collar → readable depth; all pure black.
       const cover = new THREE.Mesh(
-        new THREE.CircleGeometry(baseR * 1.02, segs),
+        new THREE.CircleGeometry(baseR * 1.04, segs),
         voidMat
       );
       cover.rotation.x = -Math.PI / 2;
-      cover.position.y = 0.055;
+      cover.position.y = 0.06;
       g.add(cover);
 
-      // 2) Stepped black shelves (inset) — depth bands on top of cover
-      const stepA = new THREE.Mesh(
-        new THREE.CircleGeometry(baseR * 0.78, segs),
-        voidNearMat
-      );
-      stepA.rotation.x = -Math.PI / 2;
-      stepA.position.y = 0.04;
-      g.add(stepA);
-      const stepB = new THREE.Mesh(
-        new THREE.CircleGeometry(baseR * 0.52, segs),
-        voidStepMat
-      );
-      stepB.rotation.x = -Math.PI / 2;
-      stepB.position.y = 0.028;
-      g.add(stepB);
-      const abyss = new THREE.Mesh(
-        new THREE.CircleGeometry(baseR * 0.32, segs),
-        voidMat
-      );
-      abyss.rotation.x = -Math.PI / 2;
-      abyss.position.y = 0.018;
-      g.add(abyss);
+      // Concentric steps sinking toward center (height diffs → ink + silhouette depth)
+      const steps = [
+        { r: 0.82, y: 0.02, h: 0.14 },
+        { r: 0.6, y: -0.12, h: 0.22 },
+        { r: 0.4, y: -0.32, h: 0.28 },
+        { r: 0.22, y: -0.55, h: 0.2 },
+      ];
+      for (const s of steps) {
+        const cyl = new THREE.Mesh(
+          new THREE.CylinderGeometry(baseR * s.r, baseR * s.r * 0.96, s.h, segs),
+          voidMat
+        );
+        cyl.position.y = s.y;
+        g.add(cyl);
+      }
 
-      // 3) Vertical shaft collar (above + below lip) for third-person wall read
+      // Inner vertical shaft wall (open cylinder) for third-person “looking in”
       const collar = new THREE.Mesh(
-        new THREE.CylinderGeometry(baseR * 0.98, baseR * 0.88, 0.55, segs, 1, true),
+        new THREE.CylinderGeometry(baseR * 0.96, baseR * 0.7, 0.9, segs, 1, true),
         voidMat
       );
-      collar.position.y = -0.18;
+      collar.position.y = -0.35;
       g.add(collar);
 
-      // 4) Deep well under the cover (visible at steep look-down / when player falls in)
       const well = new THREE.Mesh(
-        new THREE.CylinderGeometry(baseR * 0.88, baseR * 0.42, 3.2, segs, 1, true),
+        new THREE.CylinderGeometry(baseR * 0.7, baseR * 0.35, 2.8, segs, 1, true),
         voidMat
       );
-      well.position.y = -1.85;
+      well.position.y = -2.0;
       g.add(well);
       const floor = new THREE.Mesh(
-        new THREE.CircleGeometry(baseR * 0.42, segs),
+        new THREE.CircleGeometry(baseR * 0.35, segs),
         voidMat
       );
       floor.rotation.x = -Math.PI / 2;
-      floor.position.y = -3.45;
+      floor.position.y = -3.4;
       g.add(floor);
     } else {
-      // Organic: black cover discs (must sit above road) + bowl + shaft
-      g.add(extrudedDisc(pts, 1.02, 0.06, voidMat, 0.03));
-      g.add(extrudedDisc(pts, 0.78, 0.05, voidNearMat, 0.02));
-      g.add(extrudedDisc(pts, 0.52, 0.05, voidStepMat, 0.01));
-      g.add(extrudedDisc(pts, 0.32, 0.05, voidMat, 0.005));
+      // Organic: black cover above road + stepped insets + shaft
+      g.add(extrudedDisc(pts, 1.04, 0.08, voidMat, 0.02));
+      g.add(extrudedDisc(pts, 0.82, 0.14, voidMat, -0.05));
+      g.add(extrudedDisc(pts, 0.6, 0.2, voidMat, -0.22));
+      g.add(extrudedDisc(pts, 0.4, 0.24, voidMat, -0.42));
       g.add(makeOrganicBowl(pts, voidMat));
-      addSmoothShaft(g, pts, 0.92, 2.8, voidMat);
+      addSmoothShaft(g, pts, 0.9, 2.8, voidMat);
       g.add(extrudedDisc(pts, 0.32, 0.12, voidMat, -3.2));
     }
 

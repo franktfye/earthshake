@@ -123,8 +123,9 @@ const GRADE_SHADER = {
       vec3 c = texture2D( tDiffuse, vUv ).rgb;
       float l = dot( c, vec3( 0.2126, 0.7152, 0.0722 ) );
 
-      // Pitch-black abyss (fissure voids): never lift / violet-tint to gray-lavender
-      if ( l < 0.018 ) {
+      // Pitch-black abyss (fissure voids): crush before violet shadow-tint + lift
+      // (even tiny non-zero blacks become lavender-gray without this)
+      if ( l < 0.085 ) {
         gl_FragColor = vec4( 0.0, 0.0, 0.0, 1.0 );
         return;
       }
