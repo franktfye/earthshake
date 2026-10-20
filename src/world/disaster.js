@@ -123,7 +123,7 @@ export function createDisaster(world, opts = {}) {
    * Organic uses low-frequency harmonics only — no per-point jitter (avoids stairsteps).
    */
   function makeHoleOutline() {
-    const kind = rng.chance(0.45) ? 'circle' : 'organic';
+    const kind = rng.chance(0.55) ? 'circle' : 'organic';
     const baseR = rng.range(1.55, 2.45);
     const rxScale = kind === 'circle' ? 1 : rng.range(0.85, 1.2);
     const rzScale = kind === 'circle' ? 1 : rng.range(0.85, 1.2);
@@ -244,77 +244,106 @@ export function createDisaster(world, opts = {}) {
     void maxR;
   }
 
+  /** Annulus cover: hides asphalt at the rim but leaves center OPEN so you see down. */
   /**
-   * Deep round/organic void — Cylinder or high-seg extrusion + lit shaft walls.
+   * Organic bowl: scaled outline rings at depths → continuous funnel you look into.
+   * Covers road; sloping walls catch light (depth, not a flat decal).
+   */
+  function makeOrganicBowl(pts, mat) {
+    const rings = [
+      { s: 1.06, y: 0.12 },
+      { s: 1.0, y: 0.02 },
+      { s: 0.94, y: -0.25 },
+      { s: 0.84, y: -0.7 },
+      { s: 0.72, y: -1.25 },
+      { s: 0.58, y: -1.9 },
+      { s: 0.45, y: -2.6 },
+      { s: 0.32, y: -3.25 },
+      { s: 0.02, y: -3.35 },
+    ];
+    const n = pts.length;
+    const positions = [];
+    const indices = [];
+    for (let r = 0; r < rings.length; r++) {
+      const { s, y } = rings[r];
+      for (let i = 0; i < n; i++) {
+        positions.push(pts[i].x * s, y, pts[i].z * s);
+      }
+    }
+    for (let r = 0; r < rings.length - 1; r++) {
+      for (let i = 0; i < n; i++) {
+        const i0 = r * n + i;
+        const i1 = r * n + ((i + 1) % n);
+        const j0 = (r + 1) * n + i;
+        const j1 = (r + 1) * n + ((i + 1) % n);
+        // inward-facing (look into pit)
+        indices.push(i0, i1, j0);
+        indices.push(i1, j1, j0);
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.receiveShadow = true;
+    return mesh;
+  }
+
+  /**
+   * OPEN funnel pit — Lathe/bowl walls catch light so third-person reads depth.
+   * No flat black lid covering the opening.
    */
   function makeFissureVisual(outline, x, z) {
     const g = new THREE.Group();
     g.position.set(x, 0, z);
     g.name = 'fissure';
     const { pts, kind, baseR } = outline;
-    const shaftH = 3.4;
     const segs = 48;
 
     if (kind === 'circle') {
-      // Solid black plug (covers road) — perfect circle from above
-      const mouth = new THREE.Mesh(
-        new THREE.CylinderGeometry(baseR * 1.02, baseR * 1.02, 0.28, segs),
-        voidMat
-      );
-      mouth.position.y = 0.06;
-      mouth.renderOrder = 2;
-      g.add(mouth);
-
-      // Lit cylindrical shaft — vertical faces catch sun = obvious depth
-      const shaft = new THREE.Mesh(
-        new THREE.CylinderGeometry(baseR * 0.98, baseR * 0.85, shaftH, segs, 1, true),
+      const profile = [
+        new THREE.Vector2(baseR + 0.22, 0.14),
+        new THREE.Vector2(baseR * 1.04, 0.1),
+        new THREE.Vector2(baseR * 0.98, -0.05),
+        new THREE.Vector2(baseR * 0.88, -0.45),
+        new THREE.Vector2(baseR * 0.72, -1.0),
+        new THREE.Vector2(baseR * 0.58, -1.8),
+        new THREE.Vector2(baseR * 0.48, -2.7),
+        new THREE.Vector2(baseR * 0.42, -3.35),
+        new THREE.Vector2(0.02, -3.4),
+      ];
+      const funnel = new THREE.Mesh(
+        new THREE.LatheGeometry(profile, segs),
         shaftMat
       );
-      shaft.position.y = -shaftH * 0.5;
-      shaft.receiveShadow = true;
-      g.add(shaft);
+      funnel.receiveShadow = true;
+      g.add(funnel);
 
-      // Inner ledge ring (readable step into the pit)
-      const ledge = new THREE.Mesh(
-        new THREE.CylinderGeometry(baseR * 0.78, baseR * 0.78, 0.14, segs),
-        ledgeMat
-      );
-      ledge.position.y = -0.85;
-      ledge.receiveShadow = true;
-      g.add(ledge);
-
-      const ledge2 = new THREE.Mesh(
-        new THREE.CylinderGeometry(baseR * 0.55, baseR * 0.55, 0.12, segs),
-        shaftDeepMat
-      );
-      ledge2.position.y = -1.7;
-      g.add(ledge2);
-
-      // Abyss floor
       const floor = new THREE.Mesh(
-        new THREE.CylinderGeometry(baseR * 0.5, baseR * 0.45, 0.2, segs),
+        new THREE.CircleGeometry(baseR * 0.42, segs),
         voidMat
       );
-      floor.position.y = -shaftH + 0.1;
+      floor.rotation.x = -Math.PI / 2;
+      floor.position.y = -3.38;
       g.add(floor);
+
+      const ledge = new THREE.Mesh(
+        new THREE.TorusGeometry(baseR * 0.72, 0.07, 6, segs),
+        ledgeMat
+      );
+      ledge.rotation.x = Math.PI / 2;
+      ledge.position.y = -0.95;
+      ledge.receiveShadow = true;
+      g.add(ledge);
     } else {
-      // Organic blob mouth (48-gon smooth)
-      const mouth = extrudedDisc(pts, 1.02, 0.28, voidMat, 0.2);
-      mouth.renderOrder = 2;
-      g.add(mouth);
-
-      // Lit shaft walls following outline
-      addSmoothShaft(g, pts, 0.99, shaftH, shaftMat);
-
-      // Stepped ledges (shrinking) for depth cue
-      g.add(extrudedDisc(pts, 0.78, 0.14, ledgeMat, -0.75));
-      g.add(extrudedDisc(pts, 0.55, 0.12, shaftDeepMat, -1.6));
-      g.add(extrudedDisc(pts, 0.42, 0.2, voidMat, -shaftH + 0.15));
+      g.add(makeOrganicBowl(pts, shaftMat));
+      g.add(extrudedDisc(pts, 0.32, 0.15, voidMat, -3.28));
+      g.add(extrudedDisc(pts, 0.72, 0.08, ledgeMat, -0.95));
     }
 
     addSmoothRim(g, outline);
 
-    // Sparse rubble outside rim (cylinders, not square blocks)
     for (let i = 0; i < 4; i++) {
       const p = pts[rng.int(0, pts.length - 1)];
       const len = Math.hypot(p.x, p.z) || 1;
@@ -324,9 +353,9 @@ export function createDisaster(world, opts = {}) {
         rubbleMat
       );
       chunk.position.set(
-        (p.x / len) * (len + rng.range(0.25, 0.5)),
+        (p.x / len) * (len + rng.range(0.28, 0.55)),
         s * 0.45,
-        (p.z / len) * (len + rng.range(0.25, 0.5))
+        (p.z / len) * (len + rng.range(0.28, 0.55))
       );
       chunk.castShadow = true;
       g.add(chunk);
