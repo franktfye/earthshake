@@ -455,7 +455,7 @@ export function createDisaster(world, opts = {}) {
     const segs = 64;
 
     if (kind === 'circle') {
-      // Wide readable bowl: lots of sloping wall on screen, then drop to abyss
+      // Wide lathe bowl + vertical well
       const profile = [
         new THREE.Vector2(baseR + 0.4, 0.28),
         new THREE.Vector2(baseR * 1.06, 0.16),
@@ -470,16 +470,26 @@ export function createDisaster(world, opts = {}) {
       ];
       g.add(new THREE.Mesh(new THREE.LatheGeometry(profile, segs), shaftMat));
 
-      // Open well so looking in shows vertical shaft
       const well = new THREE.Mesh(
-        new THREE.CylinderGeometry(baseR * 0.85, baseR * 0.28, 4.6, segs, 1, true),
+        new THREE.CylinderGeometry(baseR * 0.9, baseR * 0.3, 4.6, segs, 1, true),
         shaftMat
       );
       well.position.y = -2.15;
       g.add(well);
 
+      // Stacked black discs — fill every view ray so fog/clear never shows as “grey road”
+      for (let i = 0; i < 9; i++) {
+        const t = i / 8;
+        const y = -0.12 - t * 4.5;
+        const r = baseR * (0.98 - t * 0.72);
+        const disc = new THREE.Mesh(new THREE.CircleGeometry(Math.max(0.12, r), segs), voidMat);
+        disc.rotation.x = -Math.PI / 2;
+        disc.position.y = y;
+        g.add(disc);
+      }
+
       // Concrete ledges inside (depth you can count)
-      for (const [ry, yy, tube] of [[0.82, -0.55, 0.08], [0.58, -1.65, 0.07], [0.38, -3.0, 0.06]]) {
+      for (const [ry, yy, tube] of [[0.82, -0.5, 0.09], [0.58, -1.55, 0.08], [0.38, -2.9, 0.07]]) {
         const ledge = new THREE.Mesh(
           new THREE.TorusGeometry(baseR * ry, tube, 8, segs),
           lipMat
@@ -488,21 +498,21 @@ export function createDisaster(world, opts = {}) {
         ledge.position.y = yy;
         g.add(ledge);
       }
-
-      const floor = new THREE.Mesh(new THREE.CircleGeometry(baseR * 0.24, segs), voidMat);
-      floor.rotation.x = -Math.PI / 2;
-      floor.position.y = -4.72;
-      g.add(floor);
     } else {
       g.add(makeOrganicBowl(pts, shaftMat));
       addSmoothShaft(g, pts, 0.95, 4.2, shaftMat);
       addSmoothShaft(g, pts, 0.65, 3.4, shaftMat);
-      // Concrete depth rings (approx)
-      g.add(extrudedDisc(pts, 0.78, 0.1, lipMat, -0.55));
-      g.add(extrudedDisc(pts, 0.52, 0.09, lipMat, -1.65));
-      g.add(extrudedDisc(pts, 0.28, 0.18, voidMat, -4.5));
+      for (let i = 0; i < 7; i++) {
+        const t = i / 6;
+        g.add(extrudedDisc(pts, 0.95 - t * 0.65, 0.08, voidMat, -0.15 - t * 4.2));
+      }
+      g.add(extrudedDisc(pts, 0.78, 0.1, lipMat, -0.5));
+      g.add(extrudedDisc(pts, 0.52, 0.09, lipMat, -1.55));
     }
 
+    g.traverse((o) => {
+      if (o.isMesh) o.renderOrder = 2;
+    });
     addSmoothRim(g, outline);
 
     for (let i = 0; i < 5; i++) {
