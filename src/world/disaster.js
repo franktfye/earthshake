@@ -37,26 +37,16 @@ export function createDisaster(world, opts = {}) {
   let holeSeq = 0;
   const holeMeshes = new Map(); // holeId → group
 
-  // Forced pitch-black abyss (raw shader — immune to lights / fog / color mgmt)
-  const abyssMat = new THREE.ShaderMaterial({
-    vertexShader: /* glsl */ `
-      void main() {
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      void main() {
-        gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
-      }
-    `,
-    side: THREE.DoubleSide,
+  // Pitch-black void — MeshBasicMaterial (unlit). Do NOT use flat() cache.
+  // Grade pass crushes luminance < 0.085 to #000 so voids stay black.
+  const voidMat = new THREE.MeshBasicMaterial({
+    color: 0x000000,
     fog: false,
     toneMapped: false,
-    depthWrite: true,
+    side: THREE.DoubleSide,
   });
-  const voidMat = abyssMat;
-  const voidNearMat = abyssMat;
-  const voidStepMat = abyssMat;
+  const voidNearMat = voidMat;
+  const voidStepMat = voidMat;
   // Bright lip only — contrast against black hole + asphalt
   const rimMat = cel({ color: 0xf0ebe3, bands: 3, tint: 0x6a6058 });
   const lipMat = cel({ color: 0xd4cdc2, bands: 2, tint: 0x5a5048 });
