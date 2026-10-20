@@ -123,6 +123,12 @@ const GRADE_SHADER = {
       vec3 c = texture2D( tDiffuse, vUv ).rgb;
       float l = dot( c, vec3( 0.2126, 0.7152, 0.0722 ) );
 
+      // Pitch-black abyss (fissure voids): never lift / violet-tint to gray-lavender
+      if ( l < 0.018 ) {
+        gl_FragColor = vec4( 0.0, 0.0, 0.0, 1.0 );
+        return;
+      }
+
       // split-tone: cool violet in the darks, warm paper white in the lights
       float k = smoothstep( 0.02, 0.55, l );
       c *= mix( uShadowTint, uLightTint, k );

@@ -49,7 +49,7 @@ export function createDisaster(world, opts = {}) {
   const shadowMatBase = flat({
     color: 0x000000,
     transparent: true,
-    opacity: 0.78,
+    opacity: 0.88,
     fog: false,
     depthWrite: false,
     side: THREE.DoubleSide,
@@ -350,8 +350,10 @@ export function createDisaster(world, opts = {}) {
   }
 
   /**
-   * Pitch-black deep hole — circle (Lathe) or organic bowl.
-   * Unlit black shaft + stepped rings for depth; bright rim only at the lip.
+   * Pitch-black deep hole — circle or organic.
+   * Road still fills the footprint, so the opening MUST be covered by opaque
+   * black geometry at/above asphalt. Stepped shelves + vertical collar read depth.
+   * Grade pass preserves near-black (see post.js) so voids stay pitch black.
    */
   function makeFissureVisual(outline, x, z) {
     const g = new THREE.Group();
@@ -361,51 +363,69 @@ export function createDisaster(world, opts = {}) {
     const segs = 48;
 
     if (kind === 'circle') {
-      // Black funnel you look into (covers road, shows vertical depth)
-      const profile = [
-        new THREE.Vector2(baseR + 0.18, 0.08),
-        new THREE.Vector2(baseR * 1.02, 0.04),
-        new THREE.Vector2(baseR * 0.98, -0.08),
-        new THREE.Vector2(baseR * 0.9, -0.5),
-        new THREE.Vector2(baseR * 0.78, -1.1),
-        new THREE.Vector2(baseR * 0.62, -1.9),
-        new THREE.Vector2(baseR * 0.5, -2.7),
-        new THREE.Vector2(baseR * 0.4, -3.35),
-        new THREE.Vector2(0.02, -3.4),
-      ];
-      const funnel = new THREE.Mesh(
-        new THREE.LatheGeometry(profile, segs),
+      // 1) Opaque black cover ABOVE road — hides asphalt in the opening
+      const cover = new THREE.Mesh(
+        new THREE.CircleGeometry(baseR * 1.02, segs),
         voidMat
       );
-      g.add(funnel);
+      cover.rotation.x = -Math.PI / 2;
+      cover.position.y = 0.055;
+      g.add(cover);
 
-      // Stepped black rings for readable depth shelves
-      const step1 = new THREE.Mesh(
-        new THREE.CylinderGeometry(baseR * 0.82, baseR * 0.82, 0.1, segs),
+      // 2) Stepped black shelves (inset) — depth bands on top of cover
+      const stepA = new THREE.Mesh(
+        new THREE.CircleGeometry(baseR * 0.78, segs),
         voidNearMat
       );
-      step1.position.y = -0.85;
-      g.add(step1);
-      const step2 = new THREE.Mesh(
-        new THREE.CylinderGeometry(baseR * 0.58, baseR * 0.58, 0.1, segs),
+      stepA.rotation.x = -Math.PI / 2;
+      stepA.position.y = 0.04;
+      g.add(stepA);
+      const stepB = new THREE.Mesh(
+        new THREE.CircleGeometry(baseR * 0.52, segs),
         voidStepMat
       );
-      step2.position.y = -1.85;
-      g.add(step2);
+      stepB.rotation.x = -Math.PI / 2;
+      stepB.position.y = 0.028;
+      g.add(stepB);
+      const abyss = new THREE.Mesh(
+        new THREE.CircleGeometry(baseR * 0.32, segs),
+        voidMat
+      );
+      abyss.rotation.x = -Math.PI / 2;
+      abyss.position.y = 0.018;
+      g.add(abyss);
 
+      // 3) Vertical shaft collar (above + below lip) for third-person wall read
+      const collar = new THREE.Mesh(
+        new THREE.CylinderGeometry(baseR * 0.98, baseR * 0.88, 0.55, segs, 1, true),
+        voidMat
+      );
+      collar.position.y = -0.18;
+      g.add(collar);
+
+      // 4) Deep well under the cover (visible at steep look-down / when player falls in)
+      const well = new THREE.Mesh(
+        new THREE.CylinderGeometry(baseR * 0.88, baseR * 0.42, 3.2, segs, 1, true),
+        voidMat
+      );
+      well.position.y = -1.85;
+      g.add(well);
       const floor = new THREE.Mesh(
-        new THREE.CircleGeometry(baseR * 0.4, segs),
+        new THREE.CircleGeometry(baseR * 0.42, segs),
         voidMat
       );
       floor.rotation.x = -Math.PI / 2;
-      floor.position.y = -3.38;
+      floor.position.y = -3.45;
       g.add(floor);
     } else {
-      // Organic black bowl + stepped shelves
+      // Organic: black cover discs (must sit above road) + bowl + shaft
+      g.add(extrudedDisc(pts, 1.02, 0.06, voidMat, 0.03));
+      g.add(extrudedDisc(pts, 0.78, 0.05, voidNearMat, 0.02));
+      g.add(extrudedDisc(pts, 0.52, 0.05, voidStepMat, 0.01));
+      g.add(extrudedDisc(pts, 0.32, 0.05, voidMat, 0.005));
       g.add(makeOrganicBowl(pts, voidMat));
-      g.add(extrudedDisc(pts, 0.78, 0.1, voidNearMat, -0.85));
-      g.add(extrudedDisc(pts, 0.55, 0.1, voidStepMat, -1.85));
-      g.add(extrudedDisc(pts, 0.32, 0.15, voidMat, -3.28));
+      addSmoothShaft(g, pts, 0.92, 2.8, voidMat);
+      g.add(extrudedDisc(pts, 0.32, 0.12, voidMat, -3.2));
     }
 
     addSmoothRim(g, outline);
