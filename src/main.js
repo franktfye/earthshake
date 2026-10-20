@@ -86,6 +86,7 @@ window.addEventListener('pointerdown', () => bgm.unlock(), { passive: true });
 window.addEventListener('keydown', () => bgm.unlock());
 
 const remotes = createRemoteManager(scene, camera);
+remotes.setLocalRoot(player.character.root);
 
 const SPECTATE_HEIGHT = 78;
 const SPECTATE_LOOK = new THREE.Vector3(0, 0, 0);
@@ -173,6 +174,7 @@ const net = createNetClient({
     hud.showRoundEnd({ scores: msg.scores || [], best });
   },
   onJoin(p) {
+    if (p.id === net.id) return; // never spawn a second body/name for self
     remotes.add(p);
     playerCount = Math.min(30, playerCount + 1);
     hud.flash(`${p.name} joined`);

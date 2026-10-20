@@ -3,10 +3,11 @@ import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer
 import { createCharacter } from '../world/character.js';
 
 /**
- * Remote players: same stylized human + name label above head.
+ * Remote players: same stylized human + exactly one name label above each head.
+ * CSS2D DOM nodes are removed on detach so clear/rejoin never stacks duplicates.
  */
 export function createRemoteManager(scene, camera) {
-  const remotes = new Map(); // id → { char, label, target, name }
+  const remotes = new Map(); // id → { char, label, target, name, isSelf, anchor }
 
   const labelRenderer = new CSS2DRenderer();
   labelRenderer.setSize(window.innerWidth, window.innerHeight);
@@ -14,32 +15,76 @@ export function createRemoteManager(scene, camera) {
   labelRenderer.domElement.style.inset = '0';
   labelRenderer.domElement.style.pointerEvents = 'none';
   labelRenderer.domElement.style.zIndex = '4';
+  labelRenderer.domElement.className = 'nametag-layer';
   document.body.appendChild(labelRenderer.domElement);
+
+  let localRoot = null; // Player character root — self nametag parents here
+
+  function detachLabel(label) {
+    if (!label) return;
+    if (label.parent) label.parent.remove(label);
+    const el = label.element;
+    if (el?.parentNode) el.parentNode.removeChild(el);
+  }
 
   function makeLabel(name, self = false) {
     const el = document.createElement('div');
     el.className = 'nametag' + (self ? ' self' : '');
-    el.textContent = name;
+    el.textContent = name || 'Runner';
     const obj = new CSS2DObject(el);
-    obj.position.set(0, 2.05, 0);
+    obj.position.set(0, 2.15, 0);
+    obj.center.set(0.5, 1);
     return obj;
   }
 
-  function add(player, { isSelf = false } = {}) {
-    if (remotes.has(player.id)) {
-      update(player);
-      return;
+  function purgeOrphanDom() {
+    const layer = labelRenderer.domElement;
+    while (layer.firstChild) layer.removeChild(layer.firstChild);
+  }
+
+  function remove(id) {
+    const r = remotes.get(id);
+    if (!r) return;
+    detachLabel(r.label);
+    if (r.isSelf) {
+      // anchor may be the shared local character — don't remove the avatar
+      if (r.anchor && r.anchor !== localRoot && r.ownedAnchor) {
+        scene.remove(r.anchor);
+      }
+    } else {
+      if (r.char) scene.remove(r.char.root);
+      else if (r.anchor) scene.remove(r.anchor);
     }
+    remotes.delete(id);
+  }
+
+  function add(player, { isSelf = false } = {}) {
+    if (!player?.id) return;
+    const existing = remotes.get(player.id);
+    if (existing) {
+      // Same entry — just refresh name / target. Rebuild if self/remote kind flipped.
+      if (!!existing.isSelf !== !!isSelf) {
+        remove(player.id);
+      } else {
+        update(player);
+        return;
+      }
+    }
+
     if (isSelf) {
-      // local body already rendered by Player — only need nametag parented to a helper
-      const anchor = new THREE.Group();
-      anchor.position.set(player.x || 0, player.y || 0, player.z || 0);
-      scene.add(anchor);
+      const parent = localRoot || (() => {
+        const g = new THREE.Group();
+        g.position.set(player.x || 0, player.y || 0, player.z || 0);
+        scene.add(g);
+        return g;
+      })();
+      const ownedAnchor = parent !== localRoot;
       const label = makeLabel(player.name || 'You', true);
-      anchor.add(label);
+      parent.add(label);
       remotes.set(player.id, {
         char: null,
-        anchor,
+        anchor: parent,
+        ownedAnchor,
         label,
         name: player.name,
         target: { ...player },
@@ -47,6 +92,7 @@ export function createRemoteManager(scene, camera) {
       });
       return;
     }
+
     const char = createCharacter();
     scene.add(char.root);
     const label = makeLabel(player.name || 'Runner');
@@ -55,19 +101,12 @@ export function createRemoteManager(scene, camera) {
     remotes.set(player.id, {
       char,
       anchor: char.root,
+      ownedAnchor: true,
       label,
       name: player.name,
       target: { ...player },
       isSelf: false,
     });
-  }
-
-  function remove(id) {
-    const r = remotes.get(id);
-    if (!r) return;
-    scene.remove(r.anchor);
-    if (r.char) scene.remove(r.char.root);
-    remotes.delete(id);
   }
 
   function update(player) {
@@ -79,7 +118,7 @@ export function createRemoteManager(scene, camera) {
     r.target = { ...r.target, ...player };
     if (player.name && player.name !== r.name) {
       r.name = player.name;
-      r.label.element.textContent = player.name;
+      if (r.label) r.label.element.textContent = player.name;
     }
   }
 
@@ -88,8 +127,8 @@ export function createRemoteManager(scene, camera) {
     for (const p of list) {
       seen.add(p.id);
       if (p.id === myId) {
-        // keep self nametag synced to local player via setSelfPose
         if (!remotes.has(p.id)) add(p, { isSelf: true });
+        else if (p.name) update(p);
         continue;
       }
       if (!remotes.has(p.id)) add(p);
@@ -101,16 +140,44 @@ export function createRemoteManager(scene, camera) {
     }
   }
 
+  /** Bind local avatar so the self nametag sits on the real character (one label). */
+  function setLocalRoot(root) {
+    localRoot = root;
+    for (const r of remotes.values()) {
+      if (!r.isSelf || !r.label) continue;
+      if (r.label.parent === root) {
+        r.anchor = root;
+        r.ownedAnchor = false;
+        continue;
+      }
+      const oldAnchor = r.anchor;
+      const owned = r.ownedAnchor;
+      detachLabel(r.label);
+      if (owned && oldAnchor && oldAnchor !== root) scene.remove(oldAnchor);
+      const label = makeLabel(r.name || 'You', true);
+      root.add(label);
+      r.label = label;
+      r.anchor = root;
+      r.ownedAnchor = false;
+    }
+  }
+
   function setSelfPose(id, name, pos, facing) {
     let r = remotes.get(id);
     if (!r) {
       add({ id, name, x: pos.x, y: pos.y, z: pos.z }, { isSelf: true });
       r = remotes.get(id);
     }
-    if (r?.anchor) {
-      r.anchor.position.set(pos.x, pos.y, pos.z);
-      if (name && r.label) r.label.element.textContent = name;
+    if (!r) return;
+    if (name && r.label) {
+      r.name = name;
+      r.label.element.textContent = name;
     }
+    // When parented to local character, pose follows the avatar automatically.
+    if (r.ownedAnchor && r.anchor && r.anchor !== localRoot) {
+      r.anchor.position.set(pos.x, pos.y, pos.z);
+    }
+    void facing;
   }
 
   function tick(dt) {
@@ -128,7 +195,6 @@ export function createRemoteManager(scene, camera) {
         !!t.run,
         dt
       );
-      // createCharacter.update sets position again — fine
       if (t.alive === false) {
         root.visible = false;
       } else {
@@ -147,7 +213,11 @@ export function createRemoteManager(scene, camera) {
 
   function clear() {
     for (const id of [...remotes.keys()]) remove(id);
+    purgeOrphanDom();
   }
 
-  return { add, remove, applyStates, setSelfPose, tick, render, resize, clear, remotes };
+  return {
+    add, remove, applyStates, setSelfPose, setLocalRoot,
+    tick, render, resize, clear, remotes,
+  };
 }

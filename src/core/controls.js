@@ -166,8 +166,8 @@ export function createControls(domElement) {
       // stick: y down is positive in screen space → forward is -y
       state.fwd = mag > 0.12 ? -stickVec.y : 0;
       state.side = mag > 0.12 ? stickVec.x : 0;
-      // run if button held OR stick past ~70% magnitude
-      state.sprint = runHeld || mag > 0.7;
+      // Stick is walk-only — sprint only via dedicated RUN button
+      state.sprint = runHeld;
       return look;
     }
 
