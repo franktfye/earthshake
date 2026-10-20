@@ -57,7 +57,16 @@ export function buildWorld(scene) {
   };
 
   function heightAt(x, z, fromY) {
+    // Shape-matched fissure fall (circle/organic) — never AABB square
+    for (const h of holes) {
+      if (typeof h.contains === 'function') {
+        if (h.contains(x, z)) return h.bottom ?? -2.5;
+      } else if (x >= h.x0 && x <= h.x1 && z >= h.z0 && z <= h.z1) {
+        return h.bottom ?? -2.5;
+      }
+    }
     for (const c of cuts) {
+      if (c.skipHeight) continue;
       if (x >= c.x0 && x <= c.x1 && z >= c.z0 && z <= c.z1) return c.top ?? -2.5;
     }
     let y = groundY(z);
