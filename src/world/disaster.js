@@ -76,8 +76,9 @@ export function createDisaster(world, opts = {}) {
       list.push({ x: h.x, z: h.z, radius: r });
     }
     setHolePunches(list);
-    // Hide every road/dirt/line tile whose AABB intersects a fissure circle
+    // Detach road/dirt/line tiles under fissures (visible=false alone was unreliable)
     const tiles = world.punchTiles || [];
+    let hidden = 0;
     for (const t of tiles) {
       const hw = t.hw ?? 1;
       const hd = t.hd ?? 1;
@@ -88,7 +89,23 @@ export function createDisaster(world, opts = {}) {
           break;
         }
       }
-      t.mesh.visible = !hide;
+      if (hide) {
+        hidden += 1;
+        t.mesh.visible = false;
+        t.mesh.scale.setScalar(0.001);
+        if (t.mesh.parent) {
+          t.parent = t.mesh.parent;
+          t.mesh.parent.remove(t.mesh);
+        }
+      } else {
+        t.mesh.visible = true;
+        t.mesh.scale.setScalar(1);
+        if (t.parent && !t.mesh.parent) t.parent.add(t.mesh);
+        t.parent = null;
+      }
+    }
+    if (typeof window !== 'undefined') {
+      window.__aftershockHoles = { count: list.length, tiles: tiles.length, hidden };
     }
   }
   // Falling-object warning: dark ground SHADOW (required), optional thin danger ring
@@ -131,7 +148,12 @@ export function createDisaster(world, opts = {}) {
     holeMeshes.clear();
     world.holes.length = 0;
     clearHolePunches();
-    for (const t of world.punchTiles || []) t.mesh.visible = true;
+    for (const t of world.punchTiles || []) {
+      t.mesh.visible = true;
+      t.mesh.scale.setScalar(1);
+      if (t.parent && !t.mesh.parent) t.parent.add(t.mesh);
+      t.parent = null;
+    }
   }
 
   /**
@@ -727,6 +749,8 @@ export function createDisaster(world, opts = {}) {
     }
 
     fireDueEvents();
+    // Keep asphalt cut open every frame (tiles can be re-added by rebuilds)
+    if (world.holes.length) syncGroundPunches();
 
     for (const b of buildings) {
       if (!b.pending || b.collapsed) continue;
