@@ -1,0 +1,27 @@
+{
+  "name": "aftershock",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "description": "Aftershock — one-map earthquake run-for-life survival (cel-shaded Three.js, multiplayer).",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "setup": "node scripts/workspace.mjs install",
+    "install:deps": "node scripts/workspace.mjs install",
+    "dev": "node scripts/workspace.mjs dev",
+    "build": "node scripts/workspace.mjs build",
+    "preview": "node scripts/workspace.mjs preview",
+    "server": "node scripts/workspace.mjs server",
+    "play": "node scripts/workspace.mjs build && node scripts/workspace.mjs preview"
+  },
+  "dependencies": {
+    "three": "^0.180.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}
