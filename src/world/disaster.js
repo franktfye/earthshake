@@ -37,20 +37,19 @@ export function createDisaster(world, opts = {}) {
   let holeSeq = 0;
   const holeMeshes = new Map(); // holeId → group
 
-  // Abyss floor: pure black (no fog/grade wash)
-  const voidMat = flat({ color: 0x000000, fog: false, toneMapped: false });
-  // Shaft walls: dark but LIT + DoubleSide so inner faces catch sun from above
-  const shaftMat = cel({ color: 0x1a181c, bands: 3, tint: 0x3a3550, side: THREE.DoubleSide });
-  const shaftDeepMat = cel({ color: 0x0e0c10, bands: 2, tint: 0x2a2838, side: THREE.DoubleSide });
-  const ledgeMat = cel({ color: 0x2e2a32, bands: 3, tint: 0x4a4558 });
-  // Bright lip so the hole edge pops against asphalt
+  // Pitch-black void (unlit, no fog/grade) — walls + floor must stay black
+  const voidMat = flat({ color: 0x000000, fog: false, toneMapped: false, side: THREE.DoubleSide });
+  const voidNearMat = flat({ color: 0x050506, fog: false, toneMapped: false, side: THREE.DoubleSide });
+  const voidStepMat = flat({ color: 0x0a0a0c, fog: false, toneMapped: false, side: THREE.DoubleSide });
+  // Bright lip only — contrast against black hole + asphalt
   const rimMat = cel({ color: 0xf0ebe3, bands: 3, tint: 0x6a6058 });
   const lipMat = cel({ color: 0xd4cdc2, bands: 2, tint: 0x5a5048 });
   const rubbleMat = cel({ color: PAL.rubble, bands: 3, tint: 0x5a5048 });
+  // Falling-object warning: dark ground SHADOW (required), optional thin danger ring
   const shadowMatBase = flat({
-    color: 0x050508,
+    color: 0x000000,
     transparent: true,
-    opacity: 0.72,
+    opacity: 0.78,
     fog: false,
     depthWrite: false,
     side: THREE.DoubleSide,
@@ -59,7 +58,7 @@ export function createDisaster(world, opts = {}) {
   const shadowRimMat = flat({
     color: PAL.danger,
     transparent: true,
-    opacity: 0.55,
+    opacity: 0.4,
     fog: false,
     depthWrite: false,
     side: THREE.DoubleSide,
@@ -87,26 +86,39 @@ export function createDisaster(world, opts = {}) {
     world.holes.length = 0;
   }
 
-  function makeWarnCircle(x, z, radius) {
+  /** Dark ground shadow (1s telegraph). Soft ellipse + optional thin danger rim. */
+  function makeWarnShadow(x, z, radius, { crack = false } = {}) {
     const g = new THREE.Group();
-    g.position.set(x, 0.06, z);
+    g.position.set(x, 0.055, z);
+    // Soft stacked discs = readable dark shadow (not a pink sticker)
     const blot = new THREE.Mesh(
-      new THREE.CircleGeometry(radius, 32),
+      new THREE.CircleGeometry(radius, 36),
       shadowMatBase.clone()
     );
     blot.rotation.x = -Math.PI / 2;
-    blot.material.opacity = 0.4;
-    const rim = new THREE.Mesh(
-      new THREE.RingGeometry(radius * 0.88, radius * 1.12, 32),
-      shadowRimMat.clone()
+    blot.material.opacity = crack ? 0.55 : 0.72;
+    const soft = new THREE.Mesh(
+      new THREE.CircleGeometry(radius * 1.25, 36),
+      shadowMatBase.clone()
     );
-    rim.rotation.x = -Math.PI / 2;
-    rim.position.y = 0.01;
-    rim.material.opacity = 0.55;
+    soft.rotation.x = -Math.PI / 2;
+    soft.position.y = -0.005;
+    soft.material.opacity = crack ? 0.28 : 0.35;
+    g.add(soft);
     g.add(blot);
-    g.add(rim);
+    if (!crack) {
+      const rim = new THREE.Mesh(
+        new THREE.RingGeometry(radius * 1.05, radius * 1.22, 36),
+        shadowRimMat.clone()
+      );
+      rim.rotation.x = -Math.PI / 2;
+      rim.position.y = 0.012;
+      rim.material.opacity = 0.35;
+      g.add(rim);
+      g.userData.rim = rim;
+    }
     g.userData.blot = blot;
-    g.userData.rim = rim;
+    g.userData.soft = soft;
     world.add(g);
     return g;
   }
@@ -338,8 +350,8 @@ export function createDisaster(world, opts = {}) {
   }
 
   /**
-   * OPEN funnel pit — Lathe/bowl walls catch light so third-person reads depth.
-   * No flat black lid covering the opening.
+   * Pitch-black deep hole — circle (Lathe) or organic bowl.
+   * Unlit black shaft + stepped rings for depth; bright rim only at the lip.
    */
   function makeFissureVisual(outline, x, z) {
     const g = new THREE.Group();
@@ -349,44 +361,51 @@ export function createDisaster(world, opts = {}) {
     const segs = 48;
 
     if (kind === 'circle') {
+      // Black funnel you look into (covers road, shows vertical depth)
       const profile = [
-        new THREE.Vector2(baseR + 0.22, 0.14),
-        new THREE.Vector2(baseR * 1.04, 0.1),
-        new THREE.Vector2(baseR * 0.98, -0.05),
-        new THREE.Vector2(baseR * 0.88, -0.45),
-        new THREE.Vector2(baseR * 0.72, -1.0),
-        new THREE.Vector2(baseR * 0.58, -1.8),
-        new THREE.Vector2(baseR * 0.48, -2.7),
-        new THREE.Vector2(baseR * 0.42, -3.35),
+        new THREE.Vector2(baseR + 0.18, 0.08),
+        new THREE.Vector2(baseR * 1.02, 0.04),
+        new THREE.Vector2(baseR * 0.98, -0.08),
+        new THREE.Vector2(baseR * 0.9, -0.5),
+        new THREE.Vector2(baseR * 0.78, -1.1),
+        new THREE.Vector2(baseR * 0.62, -1.9),
+        new THREE.Vector2(baseR * 0.5, -2.7),
+        new THREE.Vector2(baseR * 0.4, -3.35),
         new THREE.Vector2(0.02, -3.4),
       ];
       const funnel = new THREE.Mesh(
         new THREE.LatheGeometry(profile, segs),
-        shaftMat
+        voidMat
       );
-      funnel.receiveShadow = true;
       g.add(funnel);
 
+      // Stepped black rings for readable depth shelves
+      const step1 = new THREE.Mesh(
+        new THREE.CylinderGeometry(baseR * 0.82, baseR * 0.82, 0.1, segs),
+        voidNearMat
+      );
+      step1.position.y = -0.85;
+      g.add(step1);
+      const step2 = new THREE.Mesh(
+        new THREE.CylinderGeometry(baseR * 0.58, baseR * 0.58, 0.1, segs),
+        voidStepMat
+      );
+      step2.position.y = -1.85;
+      g.add(step2);
+
       const floor = new THREE.Mesh(
-        new THREE.CircleGeometry(baseR * 0.42, segs),
+        new THREE.CircleGeometry(baseR * 0.4, segs),
         voidMat
       );
       floor.rotation.x = -Math.PI / 2;
       floor.position.y = -3.38;
       g.add(floor);
-
-      const ledge = new THREE.Mesh(
-        new THREE.TorusGeometry(baseR * 0.72, 0.07, 6, segs),
-        ledgeMat
-      );
-      ledge.rotation.x = Math.PI / 2;
-      ledge.position.y = -0.95;
-      ledge.receiveShadow = true;
-      g.add(ledge);
     } else {
-      g.add(makeOrganicBowl(pts, shaftMat));
+      // Organic black bowl + stepped shelves
+      g.add(makeOrganicBowl(pts, voidMat));
+      g.add(extrudedDisc(pts, 0.78, 0.1, voidNearMat, -0.85));
+      g.add(extrudedDisc(pts, 0.55, 0.1, voidStepMat, -1.85));
       g.add(extrudedDisc(pts, 0.32, 0.15, voidMat, -3.28));
-      g.add(extrudedDisc(pts, 0.72, 0.08, ledgeMat, -0.95));
     }
 
     addSmoothRim(g, outline);
@@ -456,7 +475,7 @@ export function createDisaster(world, opts = {}) {
 
       const outline = makeHoleOutline();
       const warnR = outline.maxR * 1.05;
-      const warnMesh = makeWarnCircle(x, z, warnR);
+      const warnMesh = makeWarnShadow(x, z, warnR, { crack: true });
       pendingFissures.push({
         outline, x, z, t0: elapsed, telegraph: WARN_TELEGRAPH, warnMesh,
       });
@@ -489,7 +508,7 @@ export function createDisaster(world, opts = {}) {
     }
   }
 
-  /** Floor warning circle 1s, then object drops from above. */
+  /** Dark ground shadow for 1s, then object drops from above. */
   function spawnFallingDrop(count = 1) {
     let spawned = 0;
     for (let n = 0; n < count; n++) {
@@ -497,9 +516,9 @@ export function createDisaster(world, opts = {}) {
       if (!spot) break;
       const { x, z } = spot;
       const s = rng.range(0.45, 0.95);
-      const radius = s * 0.7;
-      const shadow = makeWarnCircle(x, z, radius * 1.35);
-      shadow.scale.setScalar(0.7);
+      const radius = s * 0.85;
+      const shadow = makeWarnShadow(x, z, radius * 1.15);
+      shadow.scale.setScalar(0.85);
 
       const mat = cel({
         color: rng.pick([PAL.rubble, PAL.concreteDark, PAL.concreteMid, 0x6a6058]),
@@ -520,7 +539,7 @@ export function createDisaster(world, opts = {}) {
     }
     if (spawned) {
       world.onQuake?.(0.12);
-      if (spawned >= 2) world.onFlash?.('Debris falling!');
+      if (spawned >= 1) world.onFlash?.('Debris falling!');
     }
     return spawned > 0;
   }
@@ -657,11 +676,11 @@ export function createDisaster(world, opts = {}) {
       const u = Math.min(1, age / pf.telegraph);
       const pulse = 0.92 + Math.sin(elapsed * 14) * 0.08;
       if (pf.warnMesh) {
-        pf.warnMesh.scale.setScalar((0.65 + u * 0.45) * pulse);
+        pf.warnMesh.scale.setScalar((0.7 + u * 0.4) * pulse);
         const blot = pf.warnMesh.userData.blot;
-        const rim = pf.warnMesh.userData.rim;
-        if (blot) blot.material.opacity = 0.4 + u * 0.45;
-        if (rim) rim.material.opacity = 0.5 + u * 0.4;
+        const soft = pf.warnMesh.userData.soft;
+        if (blot) blot.material.opacity = 0.45 + u * 0.4;
+        if (soft) soft.material.opacity = 0.22 + u * 0.25;
       }
       if (age >= pf.telegraph) {
         if (pf.warnMesh) world.root.remove(pf.warnMesh);
@@ -686,11 +705,13 @@ export function createDisaster(world, opts = {}) {
       if (d.phase === 'warn') {
         const u = Math.min(1, age / d.telegraph);
         const pulse = 0.94 + Math.sin(elapsed * 14) * 0.06;
-        d.shadow.scale.setScalar((0.7 + u * 0.4) * pulse);
+        d.shadow.scale.setScalar((0.85 + u * 0.25) * pulse);
         const blot = d.shadow.userData.blot;
+        const soft = d.shadow.userData.soft;
         const rim = d.shadow.userData.rim;
-        if (blot) blot.material.opacity = 0.5 + u * 0.42;
-        if (rim) rim.material.opacity = 0.45 + u * 0.5;
+        if (blot) blot.material.opacity = 0.65 + u * 0.28;
+        if (soft) soft.material.opacity = 0.3 + u * 0.25;
+        if (rim) rim.material.opacity = 0.3 + u * 0.25;
         if (age >= d.telegraph) beginDropFall(d);
         continue;
       }
@@ -701,9 +722,11 @@ export function createDisaster(world, opts = {}) {
         d.mesh.rotation.y += d.spin.y * dt;
         d.mesh.rotation.z += d.spin.z * dt;
         const blot = d.shadow.userData.blot;
+        const soft = d.shadow.userData.soft;
         const rim = d.shadow.userData.rim;
-        if (blot) blot.material.opacity = 0.88;
-        if (rim) rim.material.opacity = 0.8;
+        if (blot) blot.material.opacity = 0.9;
+        if (soft) soft.material.opacity = 0.45;
+        if (rim) rim.material.opacity = 0.55;
 
         if (player.alive) {
           const dx = d.mesh.position.x - player.pos.x;
@@ -735,9 +758,11 @@ export function createDisaster(world, opts = {}) {
           d.phase = 'done';
           d.doneAt = elapsed;
           const blot = d.shadow.userData.blot;
+          const soft = d.shadow.userData.soft;
           const rim = d.shadow.userData.rim;
           if (blot) blot.material.opacity = 0.2;
-          if (rim) rim.material.opacity = 0.15;
+          if (soft) soft.material.opacity = 0.1;
+          if (rim) rim.material.opacity = 0.12;
         }
       }
 
