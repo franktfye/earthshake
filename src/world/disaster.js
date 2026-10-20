@@ -104,97 +104,168 @@ export function createDisaster(world, opts = {}) {
     return null;
   }
 
+  /** Point-in-polygon (xz), local coords relative to hole center. */
+  function pointInPoly(px, pz, pts) {
+    let inside = false;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      const xi = pts[i].x, zi = pts[i].z;
+      const xj = pts[j].x, zj = pts[j].z;
+      const hit = ((zi > pz) !== (zj > pz))
+        && (px < (xj - xi) * (pz - zi) / ((zj - zi) || 1e-9) + xi);
+      if (hit) inside = !inside;
+    }
+    return inside;
+  }
+
   /**
-   * Unmistakable black hole in the ground:
-   * open pitch-black shaft (fog/grade bypass), stepped walls for depth,
-   * bright concrete rim so it reads against asphalt at a glance.
+   * Seeded outline: circle or irregular organic crack (radial polygon).
+   * Returns local {x,z} points CCW around origin.
    */
-  function makeFissureVisual(w, depth, x, z) {
-    const g = new THREE.Group();
-    g.position.set(x, 0, z);
-    g.name = 'fissure';
+  function makeHoleOutline() {
+    const kind = rng.chance(0.38) ? 'circle' : 'organic';
+    const baseR = rng.range(1.35, 2.35);
+    const rxScale = rng.range(0.75, 1.35); // elliptical stretch
+    const rzScale = rng.range(0.75, 1.35);
+    const n = kind === 'circle' ? 28 : 10 + rng.int(0, 8);
+    const pts = [];
+    for (let i = 0; i < n; i++) {
+      const t = i / n;
+      const ang = t * Math.PI * 2 + (kind === 'organic' ? rng.range(-0.12, 0.12) : 0);
+      let r = baseR;
+      if (kind === 'organic') {
+        // Lobes / jagged crack edge
+        r *= 0.72 + 0.55 * (0.55 + 0.45 * Math.sin(t * Math.PI * rng.range(2.5, 5.5) + rng.range(0, 3)));
+        r *= rng.range(0.82, 1.18);
+      }
+      pts.push({
+        x: Math.cos(ang) * r * rxScale,
+        z: Math.sin(ang) * r * rzScale,
+      });
+    }
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const p of pts) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z);
+    }
+    return { kind, pts, baseR, minX, maxX, minZ, maxZ };
+  }
 
-    const hw = w * 0.5;
-    const hd = depth * 0.5;
-    const shaftH = 3.2;
+  function shapeFromPts(pts, scale = 1) {
+    const shape = new THREE.Shape();
+    shape.moveTo(pts[0].x * scale, pts[0].z * scale);
+    for (let i = 1; i < pts.length; i++) shape.lineTo(pts[i].x * scale, pts[i].z * scale);
+    shape.closePath();
+    return shape;
+  }
 
-    // Mouth MUST sit above the road mesh (road is continuous; cut is physics-only)
-    // Thick pitch-black plug so asphalt never shows through
-    const mouth = box(w * 1.04, 0.22, depth * 1.04, voidMat, 0, 0.02, 0);
-    mouth.receiveShadow = false;
-    mouth.castShadow = false;
-    mouth.renderOrder = 2;
-    g.add(mouth);
+  function extrudedDisc(pts, scale, height, mat, y) {
+    const geo = new THREE.ExtrudeGeometry(shapeFromPts(pts, scale), {
+      depth: height,
+      bevelEnabled: false,
+      curveSegments: 1,
+    });
+    // Shape XY → ground XZ; +PI/2 keeps +Z extrusion as −Y (down into pit)
+    geo.rotateX(Math.PI / 2);
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.y = y;
+    mesh.receiveShadow = false;
+    mesh.castShadow = false;
+    return mesh;
+  }
 
-    // Secondary deeper black slab for depth under the mouth
-    g.add(box(w * 0.96, 0.5, depth * 0.96, voidNearMat, 0, -0.35, 0));
-
-    // Open shaft walls going down (look into the pit)
-    const wallT = 0.14;
-    const wallY = -shaftH * 0.5 - 0.1;
-    const north = box(w + wallT * 2, shaftH, wallT, voidNearMat, 0, wallY, -hd - wallT * 0.5);
-    const south = box(w + wallT * 2, shaftH, wallT, voidNearMat, 0, wallY, hd + wallT * 0.5);
-    const west = box(wallT, shaftH, depth, voidNearMat, -hw - wallT * 0.5, wallY, 0);
-    const east = box(wallT, shaftH, depth, voidNearMat, hw + wallT * 0.5, wallY, 0);
-    for (const wall of [north, south, west, east]) {
+  /** Vertical wall panels along polygon edges. */
+  function addShaftWalls(g, pts, scale, shaftH, mat) {
+    const n = pts.length;
+    for (let i = 0; i < n; i++) {
+      const a = pts[i];
+      const b = pts[(i + 1) % n];
+      const ax = a.x * scale, az = a.z * scale;
+      const bx = b.x * scale, bz = b.z * scale;
+      const dx = bx - ax, dz = bz - az;
+      const len = Math.hypot(dx, dz) || 0.01;
+      const midX = (ax + bx) / 2;
+      const midZ = (az + bz) / 2;
+      const wall = box(len, shaftH, 0.12, mat, midX, -shaftH * 0.5 - 0.05, midZ);
+      wall.rotation.y = Math.atan2(dx, dz);
       wall.receiveShadow = false;
       wall.castShadow = false;
       g.add(wall);
     }
+  }
 
-    // Stepped inner ledges (smaller → blacker) for vertical depth falloff
-    g.add(box(w * 0.86, 0.16, depth * 0.86, voidMidMat, 0, -0.85, 0));
-    g.add(box(w * 0.68, 0.16, depth * 0.68, voidNearMat, 0, -1.55, 0));
-    g.add(box(w * 0.5, 0.16, depth * 0.5, voidMat, 0, -2.3, 0));
+  /**
+   * Deep black void — circular or irregular extruded outline (never a square plug).
+   */
+  function makeFissureVisual(outline, x, z) {
+    const g = new THREE.Group();
+    g.position.set(x, 0, z);
+    g.name = 'fissure';
+    const { pts } = outline;
+    const shaftH = 3.2;
 
-    // Abyss floor — absolute black
-    const floor = box(w * 0.95, 0.25, depth * 0.95, voidMat, 0, -shaftH, 0);
-    floor.receiveShadow = false;
+    // Mouth above road (covers continuous asphalt)
+    const mouth = extrudedDisc(pts, 1.04, 0.22, voidMat, 0.12);
+    mouth.renderOrder = 2;
+    g.add(mouth);
+
+    // Depth steps — shrinking copies (organic falloff into abyss)
+    g.add(extrudedDisc(pts, 0.92, 0.45, voidNearMat, -0.2));
+    g.add(extrudedDisc(pts, 0.78, 0.18, voidMidMat, -0.75));
+    g.add(extrudedDisc(pts, 0.62, 0.18, voidNearMat, -1.45));
+    g.add(extrudedDisc(pts, 0.48, 0.18, voidMat, -2.15));
+
+    // Shaft walls
+    addShaftWalls(g, pts, 1.0, shaftH, voidNearMat);
+
+    // Abyss floor
+    const floor = extrudedDisc(pts, 0.9, 0.2, voidMat, -shaftH);
     g.add(floor);
 
-    // Hard black outline on top of asphalt around the mouth
-    const edgeH = 0.07;
-    const edgeY = 0.12;
-    const outline = [
-      box(w + 0.36, edgeH, 0.16, inkEdge, 0, edgeY, -hd - 0.08),
-      box(w + 0.36, edgeH, 0.16, inkEdge, 0, edgeY, hd + 0.08),
-      box(0.16, edgeH, depth + 0.36, inkEdge, -hw - 0.08, edgeY, 0),
-      box(0.16, edgeH, depth + 0.36, inkEdge, hw + 0.08, edgeY, 0),
-    ];
-    for (const e of outline) {
-      e.renderOrder = 3;
-      g.add(e);
+    // Ink edge ring (thin extruded ring via slightly larger + inset isn't trivial —
+    // use perimeter chips + dark edge bars along segments)
+    const n = pts.length;
+    for (let i = 0; i < n; i++) {
+      const a = pts[i];
+      const b = pts[(i + 1) % n];
+      const ax = a.x * 1.06, az = a.z * 1.06;
+      const bx = b.x * 1.06, bz = b.z * 1.06;
+      const dx = bx - ax, dz = bz - az;
+      const len = Math.hypot(dx, dz) || 0.01;
+      const edge = box(len, 0.06, 0.14, inkEdge, (ax + bx) / 2, 0.14, (az + bz) / 2);
+      edge.rotation.y = Math.atan2(dx, dz);
+      edge.renderOrder = 3;
+      g.add(edge);
     }
 
-    // Bright raised concrete rim — contrast against black void + gray road
-    const rimBits = 10 + rng.int(0, 3);
+    // Bright rim rubble along perimeter
+    const rimBits = Math.max(10, Math.floor(n * 0.9));
     for (let i = 0; i < rimBits; i++) {
       const t = i / rimBits;
-      const ang = t * Math.PI * 2 + rng.range(-0.1, 0.1);
-      // Place on the ellipse perimeter of the hole
-      const rx = Math.cos(ang) * (hw + rng.range(0.05, 0.22));
-      const rz = Math.sin(ang) * (hd + rng.range(0.05, 0.22));
-      const bw = rng.range(0.32, 0.62);
-      const bd = rng.range(0.26, 0.5);
-      const bh = rng.range(0.1, 0.22);
-      const chip = box(bw, bh, bd, i % 2 === 0 ? rimMat : lipMat, rx, bh * 0.5, rz);
-      chip.rotation.y = ang + rng.range(-0.35, 0.35);
+      const idx = Math.floor(t * n) % n;
+      const p = pts[idx];
+      const len = Math.hypot(p.x, p.z) || 1;
+      const ox = (p.x / len) * (len + rng.range(0.08, 0.28));
+      const oz = (p.z / len) * (len + rng.range(0.08, 0.28));
+      const bw = rng.range(0.28, 0.55);
+      const bd = rng.range(0.22, 0.45);
+      const bh = rng.range(0.1, 0.2);
+      const chip = box(bw, bh, bd, i % 2 === 0 ? rimMat : lipMat, ox, bh * 0.5 + 0.02, oz);
+      chip.rotation.y = Math.atan2(p.x, p.z) + rng.range(-0.4, 0.4);
       chip.castShadow = true;
       chip.receiveShadow = true;
       g.add(chip);
-      hullOutline(chip, { thickness: 0.0034, color: PAL.ink });
+      if (i % 2 === 0) hullOutline(chip, { thickness: 0.0034, color: PAL.ink });
     }
 
-    // Rubble on the lip
     for (let i = 0; i < 5; i++) {
-      const ang = rng.range(0, Math.PI * 2);
-      const rr = Math.max(hw, hd) + rng.range(0.15, 0.4);
+      const p = pts[rng.int(0, pts.length - 1)];
+      const len = Math.hypot(p.x, p.z) || 1;
       const s = rng.range(0.14, 0.3);
       const chunk = box(s, s * 0.7, s * 0.85, rubbleMat,
-        Math.cos(ang) * rr * (hw / Math.max(hw, hd)),
+        (p.x / len) * (len + rng.range(0.2, 0.45)),
         s * 0.4,
-        Math.sin(ang) * rr * (hd / Math.max(hw, hd)));
-      chunk.rotation.set(rng.range(-0.4, 0.4), ang, rng.range(-0.3, 0.3));
+        (p.z / len) * (len + rng.range(0.2, 0.45)));
+      chunk.rotation.set(rng.range(-0.4, 0.4), rng.range(0, 6), rng.range(-0.3, 0.3));
       chunk.castShadow = true;
       g.add(chunk);
     }
@@ -209,16 +280,25 @@ export function createDisaster(world, opts = {}) {
       const { x, z } = spot;
       if (world.holes.some((h) => Math.hypot(h.x - x, h.z - z) < 4)) continue;
 
-      const w = rng.range(2.2, 3.6);
-      const d = rng.range(3.0, 5.4);
+      const outline = makeHoleOutline();
+      const pad = 0.15;
       const hole = {
-        x, z, w, d,
-        x0: x - w / 2, x1: x + w / 2,
-        z0: z - d / 2, z1: z + d / 2,
+        x, z,
+        kind: outline.kind,
+        pts: outline.pts, // local
+        w: outline.maxX - outline.minX,
+        d: outline.maxZ - outline.minZ,
+        x0: x + outline.minX - pad,
+        x1: x + outline.maxX + pad,
+        z0: z + outline.minZ - pad,
+        z1: z + outline.maxZ + pad,
+        contains(px, pz) {
+          return pointInPoly(px - x, pz - z, outline.pts);
+        },
       };
       world.holes.push(hole);
       world.cut({ x0: hole.x0, x1: hole.x1, z0: hole.z0, z1: hole.z1, top: -2.5 });
-      world.add(makeFissureVisual(w, d, x, z));
+      world.add(makeFissureVisual(outline, x, z));
 
       world.juice?.burstDust(x, 0.4, z, 18, 1.2);
       world.juice?.impactRing(x, z, PAL.orange);

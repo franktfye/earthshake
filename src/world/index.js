@@ -72,6 +72,10 @@ export function buildWorld(scene) {
 
   function inKillHole(x, z) {
     for (const h of holes) {
+      if (typeof h.contains === 'function') {
+        if (h.contains(x, z)) return true;
+        continue;
+      }
       if (x >= h.x0 && x <= h.x1 && z >= h.z0 && z <= h.z1) return true;
     }
     return false;
