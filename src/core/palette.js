@@ -39,8 +39,12 @@ export const PAL = {
   gravel: 0xa9a3ab,
   grass: 0x86ab84,
   clay: 0xcfb59c,
-  crack: 0x3a3632,
+  crack: 0x0a0a0c,       // near-black void (not gray)
+  voidDeep: 0x000000,
+  voidRim: 0x1a181c,
+  voidLip: 0x4a4548,
   rubble: 0x8a8074,
+  dropShadow: 0x0c0a10,
 
   // --- buildings ---
   wallWhite: 0xfaf6ef,

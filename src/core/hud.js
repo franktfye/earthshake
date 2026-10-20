@@ -54,7 +54,7 @@ export function createHud() {
         <h1 id="menu-title">After<span>shock</span></h1>
         <p class="menu-description start-only">
           Enter a name and run. The town comes apart on a shared timeline —
-          dodge collapses and fissures with everyone else.
+          dodge shadowed falling debris, collapses, and black fissures.
         </p>
         <p class="menu-description dead-only">
           <span class="death-reason">—</span><br/>

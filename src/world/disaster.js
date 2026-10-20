@@ -1,61 +1,160 @@
 import * as THREE from 'three';
 import { PAL } from '../core/palette.js';
-import { cel } from '../core/toon.js';
+import { cel, flat } from '../core/toon.js';
 import { rngKit, box } from '../core/util.js';
+import { hullOutline } from '../core/outline.js';
 import { makeRubble } from './buildings.js';
 
 /**
  * Hazard scheduler — deterministic from seed + room elapsed time.
  * No player-relative picks, so all multiplayer clients share the same quakes.
+ *
+ * Difficulty knobs (challenging curve):
+ * - First event ~8s (was ~18s)
+ * - Difficulty ramps by ~42s (was ~70s)
+ * - Event gap max(1.35, 6.5 − d×4.5) + jitter (was 12 − d×9)
+ * - Higher overlap: secondary + tertiary hazards more often
+ * - Collapse telegraph max(0.8, 1.3 − d×0.55)s (tighter, still ≥0.8s)
+ * - Falling objects: fixed ~2.0s floor-shadow telegraph before impact
  */
+
+const DROP_TELEGRAPH = 2.0;
+const FALL_HEIGHT = 14;
+const FALL_SPEED = 22;
 
 export function createDisaster(world, opts = {}) {
   const seed = opts.seed ?? 20241019;
   const rng = rngKit(seed + 99);
   const buildings = world.buildings;
   let elapsed = 0;
-  let nextEventAt = 18;
+  let nextEventAt = 8;
   let eventIndex = 0;
   const debris = [];
+  const drops = []; // { shadow, mesh?, x,z, radius, t0, telegraph, phase, spin, matSize }
+
+  const voidMat = flat({ color: PAL.voidDeep, fog: true });
+  const voidWallMat = flat({ color: PAL.crack, fog: true });
+  const voidInnerMat = flat({ color: PAL.voidRim, fog: true });
+  const rimMat = cel({ color: PAL.concreteDark, bands: 3, tint: 0x3a3028 });
+  const lipMat = cel({ color: PAL.voidLip, bands: 2, tint: 0x2a2420 });
+  const rubbleMat = cel({ color: PAL.rubble, bands: 3, tint: 0x5a5048 });
+  const shadowMatBase = flat({
+    color: PAL.dropShadow,
+    transparent: true,
+    opacity: 0.55,
+    fog: false,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
 
   function reset() {
     elapsed = 0;
-    nextEventAt = 18;
+    nextEventAt = 8;
     eventIndex = 0;
     for (const d of debris) world.root.remove(d.mesh);
     debris.length = 0;
+    for (const d of drops) {
+      if (d.shadow) world.root.remove(d.shadow);
+      if (d.mesh) world.root.remove(d.mesh);
+    }
+    drops.length = 0;
   }
 
-  /** Drive clock from shared room time (seconds since room startedAt). */
   function setElapsed(t) {
     elapsed = Math.max(0, t);
   }
 
   function difficulty() {
-    return Math.min(1.35, elapsed / 70);
+    return Math.min(1.45, elapsed / 42);
   }
 
   function scheduleGap() {
     const d = difficulty();
-    return Math.max(2.2, 12 - d * 9) + rng.range(0, 3);
+    return Math.max(1.35, 6.5 - d * 4.5) + rng.range(0, 1.6);
+  }
+
+  function pickRoadSpot(minHoleDist = 3.2) {
+    for (let i = 0; i < 22; i++) {
+      const alongMain = rng.chance(0.58);
+      let x, z;
+      if (alongMain) {
+        x = rng.range(-30, 30);
+        z = rng.range(-2.4, 2.4);
+      } else {
+        x = rng.range(-2.4, 2.4);
+        z = rng.range(-30, 30);
+      }
+      if (world.holes.some((h) => Math.hypot(h.x - x, h.z - z) < minHoleDist)) continue;
+      if (drops.some((d) => Math.hypot(d.x - x, d.z - z) < 2.4)) continue;
+      return { x, z };
+    }
+    return null;
+  }
+
+  /** Black void fissure — deep pit, dark inner, cracked rim/lip (not gray decal). */
+  function makeFissureVisual(w, depth, x, z) {
+    const g = new THREE.Group();
+    g.position.set(x, 0, z);
+    g.name = 'fissure';
+
+    // Surface void plate — kills any leftover gray road under the hole
+    const mouth = box(w * 0.98, 0.06, depth * 0.98, voidMat, 0, -0.02, 0);
+    mouth.receiveShadow = false;
+    g.add(mouth);
+
+    // Deep shaft
+    const shaft = box(w * 0.9, 2.4, depth * 0.9, voidWallMat, 0, -1.22, 0);
+    g.add(shaft);
+
+    // Inner recess (slightly smaller, darker) for depth cue
+    const inner = box(w * 0.72, 1.6, depth * 0.72, voidInnerMat, 0, -1.35, 0);
+    g.add(inner);
+
+    // Bottom abyss
+    g.add(box(w * 0.68, 0.1, depth * 0.68, voidMat, 0, -2.35, 0));
+
+    // Jagged rim / debris lip around the mouth
+    const rimBits = 7 + rng.int(0, 4);
+    for (let i = 0; i < rimBits; i++) {
+      const t = i / rimBits;
+      const ang = t * Math.PI * 2 + rng.range(-0.12, 0.12);
+      const rx = Math.cos(ang) * (w * 0.48 + rng.range(-0.08, 0.18));
+      const rz = Math.sin(ang) * (depth * 0.48 + rng.range(-0.08, 0.18));
+      const bw = rng.range(0.28, 0.55);
+      const bd = rng.range(0.22, 0.48);
+      const bh = rng.range(0.07, 0.18);
+      const chip = box(bw, bh, bd, i % 3 === 0 ? lipMat : rimMat, rx, bh * 0.45, rz);
+      chip.rotation.y = ang + rng.range(-0.4, 0.4);
+      chip.castShadow = true;
+      chip.receiveShadow = true;
+      g.add(chip);
+      if (i % 2 === 0) hullOutline(chip, { thickness: 0.0032, color: PAL.ink });
+    }
+
+    // A few rubble chunks on the lip
+    for (let i = 0; i < 4; i++) {
+      const ang = rng.range(0, Math.PI * 2);
+      const rr = rng.range(0.35, 0.55) * Math.max(w, depth) * 0.5;
+      const s = rng.range(0.12, 0.28);
+      const chunk = box(s, s * 0.7, s * 0.85, rubbleMat,
+        Math.cos(ang) * rr, s * 0.35, Math.sin(ang) * rr);
+      chunk.rotation.set(rng.range(-0.4, 0.4), ang, rng.range(-0.3, 0.3));
+      chunk.castShadow = true;
+      g.add(chunk);
+    }
+
+    return g;
   }
 
   function spawnFissure() {
-    const attempts = 16;
-    for (let i = 0; i < attempts; i++) {
-      const alongMain = rng.chance(0.55);
-      let x, z;
-      if (alongMain) {
-        x = rng.range(-32, 32);
-        z = rng.range(-2.2, 2.2);
-      } else {
-        x = rng.range(-2.2, 2.2);
-        z = rng.range(-32, 32);
-      }
+    for (let i = 0; i < 16; i++) {
+      const spot = pickRoadSpot(4);
+      if (!spot) break;
+      const { x, z } = spot;
       if (world.holes.some((h) => Math.hypot(h.x - x, h.z - z) < 4)) continue;
 
-      const w = rng.range(1.4, 2.6);
-      const d = rng.range(2.2, 4.5);
+      const w = rng.range(1.5, 2.8);
+      const d = rng.range(2.4, 4.8);
       const hole = {
         x, z, w, d,
         x0: x - w / 2, x1: x + w / 2,
@@ -63,11 +162,7 @@ export function createDisaster(world, opts = {}) {
       };
       world.holes.push(hole);
       world.cut({ x0: hole.x0, x1: hole.x1, z0: hole.z0, z1: hole.z1, top: -2.5 });
-
-      const crack = box(w, 0.35, d, cel({ color: PAL.crack, bands: 2, tint: 0x3a3028 }), x, -0.12, z);
-      crack.name = 'fissure';
-      world.add(crack);
-      world.add(box(w + 0.35, 0.08, d + 0.35, cel({ color: PAL.concreteDark, bands: 3 }), x, 0.08, z));
+      world.add(makeFissureVisual(w, d, x, z));
 
       world.juice?.burstDust(x, 0.4, z, 18, 1.2);
       world.juice?.impactRing(x, z, PAL.orange);
@@ -99,6 +194,62 @@ export function createDisaster(world, opts = {}) {
     }
   }
 
+  /**
+   * Core readable hazard: floor shadow ~2s, then object drops from above.
+   */
+  function spawnFallingDrop(count = 1) {
+    let spawned = 0;
+    for (let n = 0; n < count; n++) {
+      const spot = pickRoadSpot(2.8);
+      if (!spot) break;
+      const { x, z } = spot;
+      const s = rng.range(0.45, 0.95);
+      const radius = s * 0.55;
+
+      const shadow = new THREE.Mesh(
+        new THREE.CircleGeometry(radius * 1.15, 24),
+        shadowMatBase.clone()
+      );
+      shadow.rotation.x = -Math.PI / 2;
+      shadow.position.set(x, 0.04, z);
+      shadow.material.opacity = 0.25;
+      shadow.scale.setScalar(0.55);
+      world.add(shadow);
+
+      const mat = cel({
+        color: rng.pick([PAL.rubble, PAL.concreteDark, PAL.concreteMid, 0x6a6058]),
+        bands: 3,
+        tint: 0x4a4038,
+      });
+
+      drops.push({
+        x, z, radius, s, mat,
+        shadow,
+        mesh: null,
+        t0: elapsed,
+        telegraph: DROP_TELEGRAPH,
+        phase: 'warn',
+        spin: new THREE.Vector3(rng.range(-5, 5), rng.range(-3, 3), rng.range(-5, 5)),
+      });
+      spawned += 1;
+    }
+    if (spawned) {
+      world.onQuake?.(0.12);
+      if (spawned >= 2) world.onFlash?.('Debris falling!');
+    }
+    return spawned > 0;
+  }
+
+  function beginDropFall(d) {
+    const mesh = box(d.s, d.s * 0.75, d.s * 0.85, d.mat, d.x, FALL_HEIGHT, d.z);
+    mesh.castShadow = true;
+    mesh.rotation.set(rng.range(0, 1), rng.range(0, 2), rng.range(0, 1));
+    world.add(mesh);
+    d.mesh = mesh;
+    d.phase = 'fall';
+    d.vy = -FALL_SPEED * rng.range(0.85, 1.1);
+  }
+
   function collapseBuilding(b) {
     if (b.collapsed) return false;
     b.collapsed = true;
@@ -112,13 +263,14 @@ export function createDisaster(world, opts = {}) {
     world.add(makeRubble(fp, b.height, seed + eventIndex * 17));
     world.collide(fp.x0 + 0.3, fp.z0 + 0.3, fp.x1 - 0.3, fp.z1 - 0.3, 1.1, undefined, b);
 
-    // debris toward map center — deterministic, shared
     spawnDebris(
       { x: cx, y: b.height * 0.6, z: cz },
       { x: 0, z: 0 },
-      b.collapseType === 'pancake' ? 8 : 5,
-      b.collapseType === 'facade' ? 9 : 6
+      b.collapseType === 'pancake' ? 10 : 6,
+      b.collapseType === 'facade' ? 10 : 7
     );
+    // Extra sky-drops near the collapse footprint (with shadows)
+    spawnFallingDrop(1 + (difficulty() > 0.5 ? 1 : 0));
 
     world.collapseZones.push({
       x0: fp.x0 - 0.4, x1: fp.x1 + 0.4,
@@ -136,11 +288,10 @@ export function createDisaster(world, opts = {}) {
   function startCollapse() {
     const living = buildings.filter((b) => !b.collapsed && !b.pending);
     if (!living.length) return false;
-    // deterministic pick — same index sequence on every client
     const b = living[rng.int(0, living.length - 1)];
     b.pending = true;
     b.pendingAt = elapsed;
-    b.telegraph = Math.max(0.55, 1.6 - difficulty() * 0.9);
+    b.telegraph = Math.max(0.8, 1.3 - difficulty() * 0.55);
     b.telegraphT = 0;
     b.baseRotX = b.group.rotation.x;
     b.baseRotZ = b.group.rotation.z;
@@ -149,30 +300,41 @@ export function createDisaster(world, opts = {}) {
     return true;
   }
 
+  function fireOneHazard() {
+    const d = difficulty();
+    const roll = rng.next();
+    // Weight toward falling drops mid/late; fissures early; collapses sprinkled
+    if (eventIndex < 2) {
+      if (roll < 0.55) return spawnFissure();
+      return spawnFallingDrop(1);
+    }
+    if (roll < 0.34) return spawnFallingDrop(1 + (d > 0.55 && rng.chance(0.55) ? 1 : 0));
+    if (roll < 0.62) return spawnFissure();
+    return startCollapse();
+  }
+
   function fireDueEvents() {
-    // catch-up loop for late joiners / frame skips
     let guard = 0;
-    while (elapsed >= nextEventAt && guard++ < 40) {
+    while (elapsed >= nextEventAt && guard++ < 48) {
       eventIndex += 1;
       const d = difficulty();
-      const roll = rng.next();
-      if (roll < 0.4 || eventIndex < 2) spawnFissure();
-      else startCollapse();
-      if (d > 0.7 && rng.chance(0.35)) {
-        if (rng.chance(0.5)) spawnFissure();
-        else startCollapse();
-      }
+      fireOneHazard();
+      // Overlap: secondary hazard often
+      if (d > 0.25 && rng.chance(0.42 + d * 0.28)) fireOneHazard();
+      // Tertiary sky-drops when hot
+      if (d > 0.55 && rng.chance(0.4)) spawnFallingDrop(1 + (rng.chance(0.4) ? 1 : 0));
       nextEventAt = elapsed + scheduleGap();
     }
-    if (elapsed > 20 && world.holes.length === 0 && eventIndex === 0) {
+    // Safety: something must happen early if clock was jumped
+    if (elapsed > 10 && world.holes.length === 0 && drops.length === 0 && eventIndex === 0) {
       spawnFissure();
+      spawnFallingDrop(1);
       eventIndex = 1;
       nextEventAt = elapsed + scheduleGap();
     }
   }
 
   function update(dt, player) {
-    // If world.roomElapsed is set by net layer, use shared clock
     if (typeof world.roomElapsed === 'number') {
       setElapsed(world.roomElapsed);
     } else {
@@ -196,6 +358,60 @@ export function createDisaster(world, opts = {}) {
         }
       }
       if (b.telegraphT >= b.telegraph) collapseBuilding(b);
+    }
+
+    // Falling objects with floor-shadow telegraph
+    for (let i = drops.length - 1; i >= 0; i--) {
+      const d = drops[i];
+      const age = elapsed - d.t0;
+
+      if (d.phase === 'warn') {
+        const u = Math.min(1, age / d.telegraph);
+        // Grow + darken as impact nears
+        const pulse = 0.92 + Math.sin(elapsed * 10) * 0.06;
+        d.shadow.scale.setScalar((0.55 + u * 0.55) * pulse);
+        d.shadow.material.opacity = 0.28 + u * 0.5;
+        if (age >= d.telegraph) beginDropFall(d);
+        continue;
+      }
+
+      if (d.phase === 'fall' && d.mesh) {
+        d.mesh.position.y += d.vy * dt;
+        d.mesh.rotation.x += d.spin.x * dt;
+        d.mesh.rotation.y += d.spin.y * dt;
+        d.mesh.rotation.z += d.spin.z * dt;
+        // Keep shadow locked under landing; flash brighter at impact
+        d.shadow.material.opacity = 0.75;
+
+        if (player.alive) {
+          const dx = d.mesh.position.x - player.pos.x;
+          const dy = d.mesh.position.y - (player.pos.y + 1.0);
+          const dz = d.mesh.position.z - player.pos.z;
+          if (Math.hypot(dx, dy, dz) < d.radius + 0.5) player.kill('debris');
+        }
+
+        if (d.mesh.position.y <= d.s * 0.4) {
+          d.mesh.position.y = d.s * 0.35;
+          world.juice?.burstDust(d.x, 0.3, d.z, 10, 0.9);
+          world.juice?.impactRing(d.x, d.z, PAL.orange);
+          world.onQuake?.(0.28);
+          // Ground splash kill
+          if (player.alive) {
+            const dx = d.x - player.pos.x;
+            const dz = d.z - player.pos.z;
+            if (Math.hypot(dx, dz) < d.radius + 0.55) player.kill('debris');
+          }
+          d.phase = 'done';
+          d.doneAt = elapsed;
+          d.shadow.material.opacity = 0.15;
+        }
+      }
+
+      if (d.phase === 'done' && elapsed - (d.doneAt || elapsed) > 2.2) {
+        if (d.shadow) world.root.remove(d.shadow);
+        if (d.mesh) world.root.remove(d.mesh);
+        drops.splice(i, 1);
+      }
     }
 
     const pos = player.pos;
@@ -234,5 +450,8 @@ export function createDisaster(world, opts = {}) {
     }
   }
 
-  return { update, reset, setElapsed, spawnFissure, startCollapse, get elapsed() { return elapsed; } };
+  return {
+    update, reset, setElapsed, spawnFissure, startCollapse, spawnFallingDrop,
+    get elapsed() { return elapsed; },
+  };
 }
