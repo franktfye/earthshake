@@ -48,6 +48,7 @@ export function buildWorld(scene) {
   buildStreet(ctx);
   placeBuildings(ctx, buildings, rng);
   buildStreetProps(ctx);
+  const punchTiles = ctx.punchTiles || [];
 
   const bounds = {
     x0: -MAP.half + 0.6,
@@ -95,6 +96,7 @@ export function buildWorld(scene) {
     get colliders() { return colliders; },
     set colliders(v) { colliders.length = 0; colliders.push(...v); },
     platforms, cuts, holes, collapseZones, buildings, bounds,
+    punchTiles,
     heightAt, inKillHole,
     add: ctx.add, collide: ctx.collide, cut: ctx.cut,
     onQuake: null, onFlash: null,

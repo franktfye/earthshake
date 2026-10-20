@@ -68,6 +68,18 @@ export function createDisaster(world, opts = {}) {
       list.push({ x: h.x, z: h.z, radius: r });
     }
     setHolePunches(list);
+    // Physically hide road/dirt/line tiles under each fissure (reliable cut)
+    const tiles = world.punchTiles || [];
+    for (const t of tiles) {
+      let hide = false;
+      for (const h of list) {
+        if (Math.hypot(t.x - h.x, t.z - h.z) < h.radius + (t.pad || 1.2)) {
+          hide = true;
+          break;
+        }
+      }
+      t.mesh.visible = !hide;
+    }
   }
   // Falling-object warning: dark ground SHADOW (required), optional thin danger ring
   const shadowMatBase = flat({
@@ -109,6 +121,7 @@ export function createDisaster(world, opts = {}) {
     holeMeshes.clear();
     world.holes.length = 0;
     clearHolePunches();
+    for (const t of world.punchTiles || []) t.mesh.visible = true;
   }
 
   /** Dark ground shadow (1s telegraph). Soft ellipse + optional thin danger rim. */
@@ -375,8 +388,9 @@ export function createDisaster(world, opts = {}) {
   }
 
   /**
-   * Deep OPEN black crater — asphalt is shader-punched so you look into the shaft.
-   * No flat black lid (that read as a stamp). Bright rim + steep funnel walls.
+   * Deep OPEN black crater. Road/dirt tiles are hidden under the footprint so
+   * third-person looks into sloping black walls (wide bowl = lots of wall pixels).
+   * Concrete inner ledges make depth unmistakable. No flat black lid.
    */
   function makeFissureVisual(outline, x, z) {
     const g = new THREE.Group();
@@ -386,52 +400,52 @@ export function createDisaster(world, opts = {}) {
     const segs = 64;
 
     if (kind === 'circle') {
-      // Steep lathe funnel: rim above road → abyss floor ~4.5m down
+      // Wide readable bowl: lots of sloping wall on screen, then drop to abyss
       const profile = [
-        new THREE.Vector2(baseR + 0.28, 0.2),
-        new THREE.Vector2(baseR * 1.02, 0.1),
-        new THREE.Vector2(baseR * 0.97, -0.05),
-        new THREE.Vector2(baseR * 0.88, -0.55),
-        new THREE.Vector2(baseR * 0.72, -1.4),
-        new THREE.Vector2(baseR * 0.58, -2.4),
-        new THREE.Vector2(baseR * 0.45, -3.5),
-        new THREE.Vector2(baseR * 0.32, -4.4),
-        new THREE.Vector2(0.04, -4.55),
+        new THREE.Vector2(baseR + 0.4, 0.28),
+        new THREE.Vector2(baseR * 1.06, 0.16),
+        new THREE.Vector2(baseR * 1.0, 0.02),
+        new THREE.Vector2(baseR * 0.92, -0.35),
+        new THREE.Vector2(baseR * 0.78, -0.95),
+        new THREE.Vector2(baseR * 0.62, -1.7),
+        new THREE.Vector2(baseR * 0.48, -2.6),
+        new THREE.Vector2(baseR * 0.34, -3.7),
+        new THREE.Vector2(baseR * 0.22, -4.6),
+        new THREE.Vector2(0.03, -4.75),
       ];
-      const funnel = new THREE.Mesh(new THREE.LatheGeometry(profile, segs), shaftMat);
-      g.add(funnel);
+      g.add(new THREE.Mesh(new THREE.LatheGeometry(profile, segs), shaftMat));
 
-      // Vertical well reinforcement (reads as shaft wall from 3rd person)
+      // Open well so looking in shows vertical shaft
       const well = new THREE.Mesh(
-        new THREE.CylinderGeometry(baseR * 0.9, baseR * 0.38, 4.2, segs, 1, true),
+        new THREE.CylinderGeometry(baseR * 0.85, baseR * 0.28, 4.6, segs, 1, true),
         shaftMat
       );
-      well.position.y = -2.0;
+      well.position.y = -2.15;
       g.add(well);
 
-      // Stepped ledge rings inside the shaft (silhouette depth cues)
-      for (const [ry, yy] of [[0.78, -0.7], [0.58, -1.8], [0.42, -3.0]]) {
+      // Concrete ledges inside (depth you can count)
+      for (const [ry, yy, tube] of [[0.82, -0.55, 0.08], [0.58, -1.65, 0.07], [0.38, -3.0, 0.06]]) {
         const ledge = new THREE.Mesh(
-          new THREE.TorusGeometry(baseR * ry, 0.06, 6, segs),
-          voidMat
+          new THREE.TorusGeometry(baseR * ry, tube, 8, segs),
+          lipMat
         );
         ledge.rotation.x = Math.PI / 2;
         ledge.position.y = yy;
         g.add(ledge);
       }
 
-      const floor = new THREE.Mesh(new THREE.CircleGeometry(baseR * 0.34, segs), voidMat);
+      const floor = new THREE.Mesh(new THREE.CircleGeometry(baseR * 0.24, segs), voidMat);
       floor.rotation.x = -Math.PI / 2;
-      floor.position.y = -4.52;
+      floor.position.y = -4.72;
       g.add(floor);
     } else {
-      // Organic open bowl — road punched to maxR; walls fill the view
-      const deepBowl = makeOrganicBowl(pts, shaftMat);
-      // deepen organic rings
-      g.add(deepBowl);
-      addSmoothShaft(g, pts, 0.95, 4.0, shaftMat);
-      addSmoothShaft(g, pts, 0.7, 3.2, shaftMat);
-      g.add(extrudedDisc(pts, 0.35, 0.2, voidMat, -4.3));
+      g.add(makeOrganicBowl(pts, shaftMat));
+      addSmoothShaft(g, pts, 0.95, 4.2, shaftMat);
+      addSmoothShaft(g, pts, 0.65, 3.4, shaftMat);
+      // Concrete depth rings (approx)
+      g.add(extrudedDisc(pts, 0.78, 0.1, lipMat, -0.55));
+      g.add(extrudedDisc(pts, 0.52, 0.09, lipMat, -1.65));
+      g.add(extrudedDisc(pts, 0.28, 0.18, voidMat, -4.5));
     }
 
     addSmoothRim(g, outline);

@@ -57,14 +57,25 @@ export function paveLot(ctx, { x0, x1, z0, z1, y = 0.04 }) {
   ctx.add(slab);
 }
 
+/**
+ * Tile road + dirt under the cross so fissures can hide tiles and reveal
+ * the open black shaft (whole-slab asphalt cannot be punched reliably).
+ */
+function addPunchTile(ctx, list, mesh, x, z, pad) {
+  mesh.receiveShadow = true;
+  ctx.add(mesh);
+  list.push({ mesh, x, z, pad });
+}
+
 export function buildStreet(ctx) {
   const m = mats();
   const H = MAP.half;
+  const TILE = 2.0;
+  const punchTiles = [];
+  ctx.punchTiles = punchTiles;
 
-  // base under everything
-  const ground = box(H * 2.2, 0.06, H * 2.2, m.dirt, 0, -0.05, 0);
-  ground.receiveShadow = true;
-  ctx.add(ground);
+  // No single dirt slab under the road — that would fill fissures.
+  // Lots use paveLot; road corridor uses hideable dirt tiles below.
 
   // continuous lot paving N/S/E/W of the cross (kills empty dirt silhouette)
   paveLot(ctx, { x0: -H, x1: H, z0: ROAD_HALF + WALK_W, z1: H });
@@ -72,14 +83,29 @@ export function buildStreet(ctx) {
   paveLot(ctx, { x0: -H, x1: -(ROAD_HALF + WALK_W), z0: -(ROAD_HALF + WALK_W), z1: ROAD_HALF + WALK_W });
   paveLot(ctx, { x0: ROAD_HALF + WALK_W, x1: H, z0: -(ROAD_HALF + WALK_W), z1: ROAD_HALF + WALK_W });
 
-  const main = box(H * 2, 0.1, ROAD_HALF * 2, m.road, 0, 0.05, 0);
-  main.receiveShadow = true;
-  ctx.add(main);
+  // Main E–W road as tiles + dirt underlay tiles (hide together with fissures)
+  const roadZ = ROAD_HALF * 2;
+  for (let x = -H; x < H - 0.01; x += TILE) {
+    const cx = x + TILE / 2;
+    const w = Math.min(TILE, H - x);
+    const dirt = box(w, 0.06, roadZ + 0.4, m.dirt, cx, -0.05, 0);
+    addPunchTile(ctx, punchTiles, dirt, cx, 0, Math.hypot(w, roadZ) * 0.55);
+    const asphalt = box(w, 0.1, roadZ, m.road, cx, 0.05, 0);
+    addPunchTile(ctx, punchTiles, asphalt, cx, 0, Math.hypot(w, roadZ) * 0.55);
+  }
   ctx.platform({ x0: -H, x1: H, z0: -ROAD_HALF, z1: ROAD_HALF, top: 0.1 });
 
-  const cross = box(ROAD_HALF * 2, 0.1, H * 2, m.road, 0, 0.05, 0);
-  cross.receiveShadow = true;
-  ctx.add(cross);
+  // N–S cross road tiles (skip overlap band already covered by main)
+  const roadX = ROAD_HALF * 2;
+  for (let z = -H; z < H - 0.01; z += TILE) {
+    const cz = z + TILE / 2;
+    if (Math.abs(cz) < ROAD_HALF + TILE * 0.5) continue; // overlap with main
+    const d = Math.min(TILE, H - z);
+    const dirt = box(roadX + 0.4, 0.06, d, m.dirt, 0, -0.05, cz);
+    addPunchTile(ctx, punchTiles, dirt, 0, cz, Math.hypot(roadX, d) * 0.55);
+    const asphalt = box(roadX, 0.1, d, m.road, 0, 0.05, cz);
+    addPunchTile(ctx, punchTiles, asphalt, 0, cz, Math.hypot(roadX, d) * 0.55);
+  }
   ctx.platform({ x0: -ROAD_HALF, x1: ROAD_HALF, z0: -H, z1: H, top: 0.1 });
 
   for (const side of [-1, 1]) {
@@ -104,7 +130,8 @@ export function buildStreet(ctx) {
   }
 
   for (let x = -H + 2; x < H; x += 3.5) {
-    ctx.add(box(1.4, 0.02, 0.1, m.line, x, 0.11, 0));
+    const line = box(1.4, 0.02, 0.1, m.line, x, 0.11, 0);
+    addPunchTile(ctx, punchTiles, line, x, 0, 1.0);
   }
 
   // perimeter
