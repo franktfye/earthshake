@@ -37,6 +37,12 @@ function mats() {
   return M;
 }
 
+/** Road / dirt / lane lines — punched when fissures open so pits are visible. */
+export function getPunchableGroundMats() {
+  const m = mats();
+  return [m.road, m.dirt, m.line];
+}
+
 export function groundY(_z) {
   return 0;
 }

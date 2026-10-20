@@ -124,8 +124,7 @@ const GRADE_SHADER = {
       float l = dot( c, vec3( 0.2126, 0.7152, 0.0722 ) );
 
       // Pitch-black abyss (fissure voids): crush before violet shadow-tint + lift
-      // (even tiny non-zero blacks become lavender-gray without this)
-      if ( l < 0.085 ) {
+      if ( l < 0.11 ) {
         gl_FragColor = vec4( 0.0, 0.0, 0.0, 1.0 );
         return;
       }

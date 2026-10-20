@@ -4,6 +4,8 @@ import { cel, flat } from '../core/toon.js';
 import { rngKit, box } from '../core/util.js';
 import { hullOutline } from '../core/outline.js';
 import { makeRubble } from './buildings.js';
+import { getPunchableGroundMats } from './street.js';
+import { patchGroundMaterial, setHolePunches, clearHolePunches } from './holePunch.js';
 
 /**
  * Hazard scheduler — deterministic from seed + room elapsed time.
@@ -37,20 +39,36 @@ export function createDisaster(world, opts = {}) {
   let holeSeq = 0;
   const holeMeshes = new Map(); // holeId → group
 
-  // Pitch-black void — MeshBasicMaterial (unlit). Do NOT use flat() cache.
-  // Grade pass crushes luminance < 0.085 to #000 so voids stay black.
+  // Pitch-black void — unlit, no fog. Grade also crushes near-black → #000.
   const voidMat = new THREE.MeshBasicMaterial({
     color: 0x000000,
     fog: false,
     toneMapped: false,
     side: THREE.DoubleSide,
   });
-  const voidNearMat = voidMat;
-  const voidStepMat = voidMat;
-  // Bright lip only — contrast against black hole + asphalt
+  // Slightly lifted black for shaft walls so ink/depth edges read (still crushed by grade)
+  const shaftMat = new THREE.MeshBasicMaterial({
+    color: 0x000000,
+    fog: false,
+    toneMapped: false,
+    side: THREE.DoubleSide,
+  });
+  // Bright lip — only non-black part of the crater
   const rimMat = cel({ color: 0xf0ebe3, bands: 3, tint: 0x6a6058 });
   const lipMat = cel({ color: 0xd4cdc2, bands: 2, tint: 0x5a5048 });
   const rubbleMat = cel({ color: PAL.rubble, bands: 3, tint: 0x5a5048 });
+
+  // Punch asphalt / dirt so the open funnel is actually visible
+  for (const mat of getPunchableGroundMats()) patchGroundMaterial(mat);
+
+  function syncGroundPunches() {
+    const list = [];
+    for (const h of world.holes) {
+      const r = h.punchR ?? Math.max(h.w, h.d) * 0.55;
+      list.push({ x: h.x, z: h.z, radius: r });
+    }
+    setHolePunches(list);
+  }
   // Falling-object warning: dark ground SHADOW (required), optional thin danger ring
   const shadowMatBase = flat({
     color: 0x000000,
@@ -90,6 +108,7 @@ export function createDisaster(world, opts = {}) {
     for (const mesh of holeMeshes.values()) world.root.remove(mesh);
     holeMeshes.clear();
     world.holes.length = 0;
+    clearHolePunches();
   }
 
   /** Dark ground shadow (1s telegraph). Soft ellipse + optional thin danger rim. */
@@ -137,6 +156,7 @@ export function createDisaster(world, opts = {}) {
       world.root.remove(holeMeshes.get(hole.id));
       holeMeshes.delete(hole.id);
     }
+    syncGroundPunches();
   }
 
   function setElapsed(t) {
@@ -189,7 +209,7 @@ export function createDisaster(world, opts = {}) {
    */
   function makeHoleOutline() {
     const kind = rng.chance(0.55) ? 'circle' : 'organic';
-    const baseR = rng.range(1.55, 2.45);
+    const baseR = rng.range(2.15, 3.35); // larger — depth reads from third-person
     const rxScale = kind === 'circle' ? 1 : rng.range(0.85, 1.2);
     const rzScale = kind === 'circle' ? 1 : rng.range(0.85, 1.2);
     const n = 48; // enough segments to read smooth from third-person
@@ -309,22 +329,21 @@ export function createDisaster(world, opts = {}) {
     void maxR;
   }
 
-  /** Annulus cover: hides asphalt at the rim but leaves center OPEN so you see down. */
   /**
    * Organic bowl: scaled outline rings at depths → continuous funnel you look into.
-   * Covers road; sloping walls catch light (depth, not a flat decal).
+   * Road is shader-punched; sloping walls are what you see.
    */
   function makeOrganicBowl(pts, mat) {
     const rings = [
-      { s: 1.06, y: 0.12 },
-      { s: 1.0, y: 0.02 },
-      { s: 0.94, y: -0.25 },
-      { s: 0.84, y: -0.7 },
-      { s: 0.72, y: -1.25 },
-      { s: 0.58, y: -1.9 },
-      { s: 0.45, y: -2.6 },
-      { s: 0.32, y: -3.25 },
-      { s: 0.02, y: -3.35 },
+      { s: 1.08, y: 0.18 },
+      { s: 1.0, y: 0.06 },
+      { s: 0.94, y: -0.2 },
+      { s: 0.84, y: -0.85 },
+      { s: 0.7, y: -1.7 },
+      { s: 0.55, y: -2.7 },
+      { s: 0.4, y: -3.7 },
+      { s: 0.28, y: -4.35 },
+      { s: 0.02, y: -4.5 },
     ];
     const n = pts.length;
     const positions = [];
@@ -356,91 +375,79 @@ export function createDisaster(world, opts = {}) {
   }
 
   /**
-   * Pitch-black deep hole — circle or organic.
-   * Road still fills the footprint, so the opening MUST be covered by opaque
-   * black geometry at/above asphalt. Stepped shelves + vertical collar read depth.
-   * Grade pass preserves near-black (see post.js) so voids stay pitch black.
+   * Deep OPEN black crater — asphalt is shader-punched so you look into the shaft.
+   * No flat black lid (that read as a stamp). Bright rim + steep funnel walls.
    */
   function makeFissureVisual(outline, x, z) {
     const g = new THREE.Group();
     g.position.set(x, 0, z);
     g.name = 'fissure';
     const { pts, kind, baseR } = outline;
-    const segs = 48;
+    const segs = 64;
 
     if (kind === 'circle') {
-      // Raised crater entirely ABOVE asphalt so road never shows through.
-      // Stepped shelves + vertical collar → readable depth; all pure black.
-      const cover = new THREE.Mesh(
-        new THREE.CircleGeometry(baseR * 1.04, segs),
-        voidMat
-      );
-      cover.rotation.x = -Math.PI / 2;
-      cover.position.y = 0.06;
-      g.add(cover);
-
-      // Concentric steps sinking toward center (height diffs → ink + silhouette depth)
-      const steps = [
-        { r: 0.82, y: 0.02, h: 0.14 },
-        { r: 0.6, y: -0.12, h: 0.22 },
-        { r: 0.4, y: -0.32, h: 0.28 },
-        { r: 0.22, y: -0.55, h: 0.2 },
+      // Steep lathe funnel: rim above road → abyss floor ~4.5m down
+      const profile = [
+        new THREE.Vector2(baseR + 0.28, 0.2),
+        new THREE.Vector2(baseR * 1.02, 0.1),
+        new THREE.Vector2(baseR * 0.97, -0.05),
+        new THREE.Vector2(baseR * 0.88, -0.55),
+        new THREE.Vector2(baseR * 0.72, -1.4),
+        new THREE.Vector2(baseR * 0.58, -2.4),
+        new THREE.Vector2(baseR * 0.45, -3.5),
+        new THREE.Vector2(baseR * 0.32, -4.4),
+        new THREE.Vector2(0.04, -4.55),
       ];
-      for (const s of steps) {
-        const cyl = new THREE.Mesh(
-          new THREE.CylinderGeometry(baseR * s.r, baseR * s.r * 0.96, s.h, segs),
-          voidMat
-        );
-        cyl.position.y = s.y;
-        g.add(cyl);
-      }
+      const funnel = new THREE.Mesh(new THREE.LatheGeometry(profile, segs), shaftMat);
+      g.add(funnel);
 
-      // Inner vertical shaft wall (open cylinder) for third-person “looking in”
-      const collar = new THREE.Mesh(
-        new THREE.CylinderGeometry(baseR * 0.96, baseR * 0.7, 0.9, segs, 1, true),
-        voidMat
-      );
-      collar.position.y = -0.35;
-      g.add(collar);
-
+      // Vertical well reinforcement (reads as shaft wall from 3rd person)
       const well = new THREE.Mesh(
-        new THREE.CylinderGeometry(baseR * 0.7, baseR * 0.35, 2.8, segs, 1, true),
-        voidMat
+        new THREE.CylinderGeometry(baseR * 0.9, baseR * 0.38, 4.2, segs, 1, true),
+        shaftMat
       );
       well.position.y = -2.0;
       g.add(well);
-      const floor = new THREE.Mesh(
-        new THREE.CircleGeometry(baseR * 0.35, segs),
-        voidMat
-      );
+
+      // Stepped ledge rings inside the shaft (silhouette depth cues)
+      for (const [ry, yy] of [[0.78, -0.7], [0.58, -1.8], [0.42, -3.0]]) {
+        const ledge = new THREE.Mesh(
+          new THREE.TorusGeometry(baseR * ry, 0.06, 6, segs),
+          voidMat
+        );
+        ledge.rotation.x = Math.PI / 2;
+        ledge.position.y = yy;
+        g.add(ledge);
+      }
+
+      const floor = new THREE.Mesh(new THREE.CircleGeometry(baseR * 0.34, segs), voidMat);
       floor.rotation.x = -Math.PI / 2;
-      floor.position.y = -3.4;
+      floor.position.y = -4.52;
       g.add(floor);
     } else {
-      // Organic: black cover above road + stepped insets + shaft
-      g.add(extrudedDisc(pts, 1.04, 0.08, voidMat, 0.02));
-      g.add(extrudedDisc(pts, 0.82, 0.14, voidMat, -0.05));
-      g.add(extrudedDisc(pts, 0.6, 0.2, voidMat, -0.22));
-      g.add(extrudedDisc(pts, 0.4, 0.24, voidMat, -0.42));
-      g.add(makeOrganicBowl(pts, voidMat));
-      addSmoothShaft(g, pts, 0.9, 2.8, voidMat);
-      g.add(extrudedDisc(pts, 0.32, 0.12, voidMat, -3.2));
+      // Organic open bowl — road punched to maxR; walls fill the view
+      const deepBowl = makeOrganicBowl(pts, shaftMat);
+      // deepen organic rings
+      g.add(deepBowl);
+      addSmoothShaft(g, pts, 0.95, 4.0, shaftMat);
+      addSmoothShaft(g, pts, 0.7, 3.2, shaftMat);
+      g.add(extrudedDisc(pts, 0.35, 0.2, voidMat, -4.3));
     }
 
     addSmoothRim(g, outline);
 
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 5; i++) {
       const p = pts[rng.int(0, pts.length - 1)];
       const len = Math.hypot(p.x, p.z) || 1;
-      const s = rng.range(0.1, 0.2);
+      const s = rng.range(0.12, 0.24);
       const chunk = new THREE.Mesh(
         new THREE.CylinderGeometry(s, s * 0.85, s * 1.1, 7),
         rubbleMat
       );
       chunk.position.set(
-        (p.x / len) * (len + rng.range(0.28, 0.55)),
+        (p.x / len) * (len + rng.range(0.3, 0.6)),
         s * 0.45,
-        (p.z / len) * (len + rng.range(0.28, 0.55))
+        (p.z / len) * (len + rng.range(0.3, 0.6))
       );
       chunk.castShadow = true;
       g.add(chunk);
@@ -451,11 +458,13 @@ export function createDisaster(world, opts = {}) {
 
   function openFissure(outline, x, z) {
     const id = ++holeSeq;
+    const punchR = outline.maxR * 1.06;
     const hole = {
       id, x, z,
       kind: outline.kind,
       pts: outline.pts,
-      bottom: -2.5,
+      punchR,
+      bottom: -4.0,
       spawnedAt: elapsed,
       expiresAt: elapsed + HOLE_LIFETIME,
       w: outline.maxX - outline.minX,
@@ -477,6 +486,7 @@ export function createDisaster(world, opts = {}) {
     const mesh = makeFissureVisual(outline, x, z);
     world.add(mesh);
     holeMeshes.set(id, mesh);
+    syncGroundPunches();
     world.juice?.burstDust(x, 0.4, z, 18, 1.2);
     world.juice?.impactRing(x, z, PAL.orange);
     world.onQuake?.(0.45);
