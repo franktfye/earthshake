@@ -51,6 +51,25 @@ export function createHud() {
 
   const hint = el('div', 'hint', root, '');
   const toast = el('div', 'toast', root, '');
+  const spectateBanner = el('div', 'spectate-banner', root, `
+    <strong>Spectating</strong> · Waiting for round to end
+  `);
+
+  const lobby = el('div', 'lobby-panel', root, `
+    <div class="lobby-head">
+      <div class="lobby-title">Lobby</div>
+      <div class="lobby-slots"><span class="lobby-filled">0</span>/30</div>
+    </div>
+    <div class="lobby-countdown">—</div>
+    <ul class="lobby-list"></ul>
+    <button type="button" class="lobby-ready">Ready</button>
+  `);
+  const lobbyFilled = lobby.querySelector('.lobby-filled');
+  const lobbyCountdown = lobby.querySelector('.lobby-countdown');
+  const lobbyList = lobby.querySelector('.lobby-list');
+  const lobbyReadyBtn = lobby.querySelector('.lobby-ready');
+  let onReady = null;
+  lobbyReadyBtn.addEventListener('click', () => onReady?.());
 
   let savedName = '';
   try { savedName = localStorage.getItem(NAME_KEY) || ''; } catch { /* */ }
@@ -141,7 +160,7 @@ export function createHud() {
       onStart?.(name);
       return;
     }
-    // dead → retry
+    // dead / round-end → back to name/start (lobby rejoins via onStart)
     onStart?.(sanitizeName(nameInput?.value) || savedName || 'Runner');
   });
 
@@ -157,12 +176,67 @@ export function createHud() {
     overlay.dataset.mode = 'start';
     overlay.classList.add('on');
     vitals.classList.remove('on');
+    lobby.classList.remove('on');
+    spectateBanner.classList.remove('on');
     setNetStatus('');
   }
 
   function showPlaying() {
     overlay.classList.remove('on');
+    lobby.classList.remove('on');
+    spectateBanner.classList.remove('on');
     vitals.classList.add('on');
+  }
+
+  function showLobby() {
+    overlay.classList.remove('on');
+    vitals.classList.remove('on');
+    spectateBanner.classList.remove('on');
+    lobby.classList.add('on');
+  }
+
+  function hideLobby() {
+    lobby.classList.remove('on');
+  }
+
+  function updateLobby({ filled, max, endsAt, serverNow, mode, players, myId, ready }) {
+    lobbyFilled.textContent = String(filled ?? players?.length ?? 0);
+    const now = serverNow || Date.now();
+    const left = Math.max(0, Math.ceil(((endsAt || now) - now) / 1000));
+    if (mode === 'starting') {
+      lobbyCountdown.textContent = `All ready — starting in ${left}s`;
+    } else {
+      lobbyCountdown.textContent = `Auto-start in ${left}s · or Ready up`;
+    }
+    lobbyList.innerHTML = '';
+    const slots = max || 30;
+    const list = players || [];
+    for (let i = 0; i < slots; i++) {
+      const li = document.createElement('li');
+      const p = list[i];
+      if (p) {
+        li.className = 'filled' + (p.ready ? ' is-ready' : '') + (p.id === myId ? ' is-me' : '');
+        li.innerHTML = `<span class="nm">${escapeAttr(p.name)}</span>`
+          + `<span class="st">${p.ready ? 'Ready' : '…'}</span>`;
+      } else {
+        li.className = 'empty';
+        li.textContent = 'Empty';
+      }
+      lobbyList.appendChild(li);
+    }
+    lobbyReadyBtn.disabled = !!ready;
+    lobbyReadyBtn.textContent = ready ? 'Waiting…' : 'Ready';
+  }
+
+  function showSpectate() {
+    spectateBanner.classList.add('on');
+    vitals.classList.add('on');
+    overlay.classList.remove('on');
+    lobby.classList.remove('on');
+  }
+
+  function hideSpectate() {
+    spectateBanner.classList.remove('on');
   }
 
   function showDead({ reason, time, score, best }) {
@@ -173,6 +247,28 @@ export function createHud() {
     bestScore.textContent = String(Math.floor(best));
     overlay.classList.add('on');
     vitals.classList.remove('on');
+    lobby.classList.remove('on');
+    spectateBanner.classList.remove('on');
+  }
+
+  function showRoundEnd({ scores, best: bestScoreVal }) {
+    const top = (scores || []).slice(0, 5)
+      .map((s, i) => `${i + 1}. ${s.name} — ${s.score}`)
+      .join('<br/>') || '—';
+    overlay.dataset.mode = 'dead';
+    deathReason.innerHTML = `Round over<br/><span class="round-scores">${top}</span>`;
+    finalTime.textContent = '—';
+    finalScore.textContent = scores?.[0] ? String(scores.find((s) => s)?.score ?? 0) : '0';
+    // show local best if provided
+    if (bestScoreVal != null) bestScore.textContent = String(Math.floor(bestScoreVal));
+    const deadOnly = overlay.querySelector('.dead-only');
+    if (deadOnly) deadOnly.textContent = 'Round results';
+    const btn = overlay.querySelector('.menu-action .dead-only');
+    if (btn) btn.textContent = 'Back to lobby';
+    overlay.classList.add('on');
+    vitals.classList.remove('on');
+    lobby.classList.remove('on');
+    spectateBanner.classList.remove('on');
   }
 
   function showFull(message) {
@@ -231,10 +327,17 @@ export function createHud() {
   return {
     set onStart(fn) { onStart = fn; },
     set onMuteToggle(fn) { onMuteToggle = fn; },
+    set onReady(fn) { onReady = fn; },
     setMobile,
     showStart,
     showPlaying,
+    showLobby,
+    hideLobby,
+    updateLobby,
+    showSpectate,
+    hideSpectate,
     showDead,
+    showRoundEnd,
     showFull,
     update,
     pulseHurt,

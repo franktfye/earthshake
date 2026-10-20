@@ -15,10 +15,12 @@ import { makeRubble } from './buildings.js';
  * - Event gap max(1.35, 6.5 − d×4.5) + jitter (was 12 − d×9)
  * - Higher overlap: secondary + tertiary hazards more often
  * - Collapse telegraph max(0.8, 1.3 − d×0.55)s (tighter, still ≥0.8s)
- * - Falling objects: fixed ~2.0s floor-shadow telegraph before impact
+ * - Hazard ground warning circle: 1.0s before impact / crack open
+ * - Ground cracks despawn after 60s (shared room elapsed)
  */
 
-const DROP_TELEGRAPH = 2.0;
+const WARN_TELEGRAPH = 1.0;
+const HOLE_LIFETIME = 60;
 const FALL_HEIGHT = 14;
 const FALL_SPEED = 22;
 
@@ -30,7 +32,10 @@ export function createDisaster(world, opts = {}) {
   let nextEventAt = 5; // first readable hazard sooner
   let eventIndex = 0;
   const debris = [];
-  const drops = []; // { shadow, mesh?, x,z, radius, t0, telegraph, phase, spin, matSize }
+  const drops = []; // { shadow, mesh?, x,z, radius, t0, telegraph, phase, ... }
+  const pendingFissures = []; // { outline, x, z, t0, warnMesh, holeId }
+  let holeSeq = 0;
+  const holeMeshes = new Map(); // holeId → group
 
   // Abyss floor: pure black (no fog/grade wash)
   const voidMat = flat({ color: 0x000000, fog: false, toneMapped: false });
@@ -63,8 +68,9 @@ export function createDisaster(world, opts = {}) {
 
   function reset() {
     elapsed = 0;
-    nextEventAt = 8;
+    nextEventAt = 5;
     eventIndex = 0;
+    holeSeq = 0;
     for (const d of debris) world.root.remove(d.mesh);
     debris.length = 0;
     for (const d of drops) {
@@ -72,6 +78,47 @@ export function createDisaster(world, opts = {}) {
       if (d.mesh) world.root.remove(d.mesh);
     }
     drops.length = 0;
+    for (const pf of pendingFissures) {
+      if (pf.warnMesh) world.root.remove(pf.warnMesh);
+    }
+    pendingFissures.length = 0;
+    for (const mesh of holeMeshes.values()) world.root.remove(mesh);
+    holeMeshes.clear();
+    world.holes.length = 0;
+  }
+
+  function makeWarnCircle(x, z, radius) {
+    const g = new THREE.Group();
+    g.position.set(x, 0.06, z);
+    const blot = new THREE.Mesh(
+      new THREE.CircleGeometry(radius, 32),
+      shadowMatBase.clone()
+    );
+    blot.rotation.x = -Math.PI / 2;
+    blot.material.opacity = 0.4;
+    const rim = new THREE.Mesh(
+      new THREE.RingGeometry(radius * 0.88, radius * 1.12, 32),
+      shadowRimMat.clone()
+    );
+    rim.rotation.x = -Math.PI / 2;
+    rim.position.y = 0.01;
+    rim.material.opacity = 0.55;
+    g.add(blot);
+    g.add(rim);
+    g.userData.blot = blot;
+    g.userData.rim = rim;
+    world.add(g);
+    return g;
+  }
+
+  function removeHole(hole) {
+    if (!hole) return;
+    const idx = world.holes.indexOf(hole);
+    if (idx >= 0) world.holes.splice(idx, 1);
+    if (hole.id != null && holeMeshes.has(hole.id)) {
+      world.root.remove(holeMeshes.get(hole.id));
+      holeMeshes.delete(hole.id);
+    }
   }
 
   function setElapsed(t) {
@@ -364,41 +411,57 @@ export function createDisaster(world, opts = {}) {
     return g;
   }
 
+  function openFissure(outline, x, z) {
+    const id = ++holeSeq;
+    const hole = {
+      id, x, z,
+      kind: outline.kind,
+      pts: outline.pts,
+      bottom: -2.5,
+      spawnedAt: elapsed,
+      expiresAt: elapsed + HOLE_LIFETIME,
+      w: outline.maxX - outline.minX,
+      d: outline.maxZ - outline.minZ,
+      x0: x + outline.minX,
+      x1: x + outline.maxX,
+      z0: z + outline.minZ,
+      z1: z + outline.maxZ,
+      contains(px, pz) {
+        if (outline.kind === 'circle') {
+          const dx = px - x;
+          const dz = pz - z;
+          return (dx * dx + dz * dz) <= outline.baseR * outline.baseR;
+        }
+        return pointInPoly(px - x, pz - z, outline.pts);
+      },
+    };
+    world.holes.push(hole);
+    const mesh = makeFissureVisual(outline, x, z);
+    world.add(mesh);
+    holeMeshes.set(id, mesh);
+    world.juice?.burstDust(x, 0.4, z, 18, 1.2);
+    world.juice?.impactRing(x, z, PAL.orange);
+    world.onQuake?.(0.45);
+    return hole;
+  }
+
+  /** Queue fissure with 1s warning circle, then open. */
   function spawnFissure() {
     for (let i = 0; i < 16; i++) {
       const spot = pickRoadSpot(4);
       if (!spot) break;
       const { x, z } = spot;
       if (world.holes.some((h) => Math.hypot(h.x - x, h.z - z) < 4)) continue;
+      if (pendingFissures.some((p) => Math.hypot(p.x - x, p.z - z) < 4)) continue;
 
       const outline = makeHoleOutline();
-      const hole = {
-        x, z,
-        kind: outline.kind,
-        pts: outline.pts,
-        bottom: -2.5,
-        w: outline.maxX - outline.minX,
-        d: outline.maxZ - outline.minZ,
-        x0: x + outline.minX,
-        x1: x + outline.maxX,
-        z0: z + outline.minZ,
-        z1: z + outline.maxZ,
-        contains(px, pz) {
-          if (outline.kind === 'circle') {
-            const dx = px - x;
-            const dz = pz - z;
-            return (dx * dx + dz * dz) <= outline.baseR * outline.baseR;
-          }
-          return pointInPoly(px - x, pz - z, outline.pts);
-        },
-      };
-      world.holes.push(hole);
-      // No AABB cut — heightAt uses hole.contains (shape-matched)
-      world.add(makeFissureVisual(outline, x, z));
-
-      world.juice?.burstDust(x, 0.4, z, 18, 1.2);
-      world.juice?.impactRing(x, z, PAL.orange);
-      world.onQuake?.(0.45);
+      const warnR = outline.maxR * 1.05;
+      const warnMesh = makeWarnCircle(x, z, warnR);
+      pendingFissures.push({
+        outline, x, z, t0: elapsed, telegraph: WARN_TELEGRAPH, warnMesh,
+      });
+      world.onQuake?.(0.1);
+      world.onFlash?.('Ground cracking!');
       return true;
     }
     return false;
@@ -426,9 +489,7 @@ export function createDisaster(world, opts = {}) {
     }
   }
 
-  /**
-   * Core readable hazard: floor shadow ~2s, then object drops from above.
-   */
+  /** Floor warning circle 1s, then object drops from above. */
   function spawnFallingDrop(count = 1) {
     let spawned = 0;
     for (let n = 0; n < count; n++) {
@@ -436,29 +497,9 @@ export function createDisaster(world, opts = {}) {
       if (!spot) break;
       const { x, z } = spot;
       const s = rng.range(0.45, 0.95);
-      const radius = s * 0.55;
-
-      const shadow = new THREE.Group();
-      shadow.position.set(x, 0.05, z);
-      const blot = new THREE.Mesh(
-        new THREE.CircleGeometry(radius * 1.2, 28),
-        shadowMatBase.clone()
-      );
-      blot.rotation.x = -Math.PI / 2;
-      blot.material.opacity = 0.35;
-      const rim = new THREE.Mesh(
-        new THREE.RingGeometry(radius * 1.05, radius * 1.35, 28),
-        shadowRimMat.clone()
-      );
-      rim.rotation.x = -Math.PI / 2;
-      rim.position.y = 0.01;
-      rim.material.opacity = 0.35;
-      shadow.add(blot);
-      shadow.add(rim);
-      shadow.scale.setScalar(0.55);
-      shadow.userData.blot = blot;
-      shadow.userData.rim = rim;
-      world.add(shadow);
+      const radius = s * 0.7;
+      const shadow = makeWarnCircle(x, z, radius * 1.35);
+      shadow.scale.setScalar(0.7);
 
       const mat = cel({
         color: rng.pick([PAL.rubble, PAL.concreteDark, PAL.concreteMid, 0x6a6058]),
@@ -471,7 +512,7 @@ export function createDisaster(world, opts = {}) {
         shadow,
         mesh: null,
         t0: elapsed,
-        telegraph: DROP_TELEGRAPH,
+        telegraph: WARN_TELEGRAPH,
         phase: 'warn',
         spin: new THREE.Vector3(rng.range(-5, 5), rng.range(-3, 3), rng.range(-5, 5)),
       });
@@ -609,16 +650,43 @@ export function createDisaster(world, opts = {}) {
       if (b.telegraphT >= b.telegraph) collapseBuilding(b);
     }
 
-    // Falling objects with floor-shadow telegraph
+    // Pending fissures: 1s warning circle then open
+    for (let i = pendingFissures.length - 1; i >= 0; i--) {
+      const pf = pendingFissures[i];
+      const age = elapsed - pf.t0;
+      const u = Math.min(1, age / pf.telegraph);
+      const pulse = 0.92 + Math.sin(elapsed * 14) * 0.08;
+      if (pf.warnMesh) {
+        pf.warnMesh.scale.setScalar((0.65 + u * 0.45) * pulse);
+        const blot = pf.warnMesh.userData.blot;
+        const rim = pf.warnMesh.userData.rim;
+        if (blot) blot.material.opacity = 0.4 + u * 0.45;
+        if (rim) rim.material.opacity = 0.5 + u * 0.4;
+      }
+      if (age >= pf.telegraph) {
+        if (pf.warnMesh) world.root.remove(pf.warnMesh);
+        openFissure(pf.outline, pf.x, pf.z);
+        pendingFissures.splice(i, 1);
+      }
+    }
+
+    // Despawn cracks after 1 minute (shared room elapsed)
+    for (let i = world.holes.length - 1; i >= 0; i--) {
+      const h = world.holes[i];
+      if (h.expiresAt != null && elapsed >= h.expiresAt) {
+        removeHole(h);
+      }
+    }
+
+    // Falling objects with 1s floor-warning circle
     for (let i = drops.length - 1; i >= 0; i--) {
       const d = drops[i];
       const age = elapsed - d.t0;
 
       if (d.phase === 'warn') {
         const u = Math.min(1, age / d.telegraph);
-        // Grow + darken as impact nears (~2s floor telegraph)
-        const pulse = 0.94 + Math.sin(elapsed * 11) * 0.06;
-        d.shadow.scale.setScalar((0.55 + u * 0.55) * pulse);
+        const pulse = 0.94 + Math.sin(elapsed * 14) * 0.06;
+        d.shadow.scale.setScalar((0.7 + u * 0.4) * pulse);
         const blot = d.shadow.userData.blot;
         const rim = d.shadow.userData.rim;
         if (blot) blot.material.opacity = 0.5 + u * 0.42;

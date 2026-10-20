@@ -1,9 +1,13 @@
 import { getOrCreateClientId, sanitizeName, wsUrl } from './protocol.js';
 
 /**
- * Thin WebSocket client for the Aftershock room.
+ * Thin WebSocket client for the Aftershock room / lobby.
  */
-export function createNetClient({ onWelcome, onFull, onJoin, onLeave, onStates, onClose, onError }) {
+export function createNetClient({
+  onWelcome, onFull, onJoin, onLeave, onStates,
+  onLobby, onRoundStart, onRoundEnd,
+  onClose, onError,
+}) {
   let ws = null;
   let myId = null;
   let connected = false;
@@ -40,9 +44,19 @@ export function createNetClient({ onWelcome, onFull, onJoin, onLeave, onStates, 
         case 'welcome':
           myId = msg.id;
           onWelcome?.(msg);
+          if (msg.lobby) onLobby?.(msg.lobby);
           break;
         case 'full':
           onFull?.(msg.message || 'Server full');
+          break;
+        case 'lobby':
+          onLobby?.(msg);
+          break;
+        case 'roundStart':
+          onRoundStart?.(msg);
+          break;
+        case 'roundEnd':
+          onRoundEnd?.(msg);
           break;
         case 'join':
           if (msg.player?.id !== myId) onJoin?.(msg.player);
@@ -51,7 +65,7 @@ export function createNetClient({ onWelcome, onFull, onJoin, onLeave, onStates, 
           onLeave?.(msg.id);
           break;
         case 'states':
-          onStates?.(msg.players || []);
+          onStates?.(msg.players || [], msg);
           break;
         default:
           break;
@@ -74,10 +88,15 @@ export function createNetClient({ onWelcome, onFull, onJoin, onLeave, onStates, 
     myId = null;
   }
 
+  function sendReady() {
+    if (!ws || ws.readyState !== 1) return;
+    ws.send(JSON.stringify({ type: 'ready' }));
+  }
+
   function sendState(state, dt) {
     if (!ws || ws.readyState !== 1) return;
     sendAcc += dt;
-    if (sendAcc < 0.05) return; // ~20 Hz
+    if (sendAcc < 0.05) return;
     sendAcc = 0;
     ws.send(JSON.stringify({ type: 'state', ...state }));
   }
@@ -85,6 +104,7 @@ export function createNetClient({ onWelcome, onFull, onJoin, onLeave, onStates, 
   return {
     connect,
     disconnect,
+    sendReady,
     sendState,
     get id() { return myId; },
     get connected() { return connected; },

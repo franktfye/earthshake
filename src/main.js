@@ -63,6 +63,9 @@ let world = buildWorld(scene);
 let roomStartedAt = null;
 let displayName = '';
 let playerCount = 1;
+let phase = 'menu'; // menu | lobby | playing | spectate | roundEnd
+let lobbyReady = false;
+let onlineMode = false;
 
 const controls = createControls(canvas);
 const player = new Player(camera, canvas, world, controls, {
@@ -79,30 +82,95 @@ hud.onMuteToggle = () => {
   hud.setMuted(muted);
 };
 bgm.onChange(({ muted }) => hud.setMuted(muted));
-// Unlock audio on first pointer gesture (autoplay policy)
-const unlockAudio = () => bgm.unlock();
-window.addEventListener('pointerdown', unlockAudio, { passive: true });
-window.addEventListener('keydown', unlockAudio);
+window.addEventListener('pointerdown', () => bgm.unlock(), { passive: true });
+window.addEventListener('keydown', () => bgm.unlock());
 
 const remotes = createRemoteManager(scene, camera);
+
+const SPECTATE_HEIGHT = 78;
+const SPECTATE_LOOK = new THREE.Vector3(0, 0, 0);
+let spectateT = 0;
+
+function enterSpectate() {
+  phase = 'spectate';
+  player.playing = false;
+  controls.unlock();
+  controls.setVisible(false);
+  hud.showSpectate();
+  hud.setHint('Spectating survivors · round ends when none remain');
+  if (player.character?.root) player.character.root.visible = false;
+}
+
+function applySpectateCamera(dt) {
+  spectateT += dt;
+  const bob = Math.sin(spectateT * 0.35) * 2;
+  camera.position.set(4 + bob * 0.2, SPECTATE_HEIGHT, 10);
+  camera.up.set(0, 0, -1);
+  camera.lookAt(SPECTATE_LOOK.x, 0, SPECTATE_LOOK.z);
+}
 
 const net = createNetClient({
   onWelcome(msg) {
     welcomed = true;
     if (joinTimeout) clearTimeout(joinTimeout);
-    roomStartedAt = msg.startedAt;
+    onlineMode = true;
     playerCount = 1 + (msg.players?.length || 0);
-    hud.setNetStatus(`Connected · room seed ${msg.seed}`);
+    hud.setNetStatus(`Connected · ${msg.phase || 'lobby'}`);
     remotes.clear();
-    remotes.add({ id: msg.id, name: displayName, x: player.pos.x, y: player.pos.y, z: player.pos.z }, { isSelf: true });
+    remotes.add({
+      id: msg.id, name: displayName,
+      x: player.pos.x, y: player.pos.y, z: player.pos.z,
+    }, { isSelf: true });
     for (const p of msg.players || []) remotes.add(p);
-    beginPlay({ online: true });
+
+    if (msg.phase === 'playing') {
+      // Late join mid-round → spectate
+      roomStartedAt = msg.startedAt;
+      beginPlay({ online: true, spectate: true });
+    } else {
+      phase = 'lobby';
+      lobbyReady = false;
+      hud.showLobby();
+      if (msg.lobby) applyLobby(msg.lobby);
+    }
   },
   onFull(message) {
     welcomed = true;
     if (joinTimeout) clearTimeout(joinTimeout);
     hud.setNetStatus('');
     hud.showFull(message);
+  },
+  onLobby(lobby) {
+    if (phase === 'playing' || phase === 'spectate') return;
+    phase = 'lobby';
+    applyLobby(lobby);
+    hud.showLobby();
+  },
+  onRoundStart(msg) {
+    roomStartedAt = msg.startedAt;
+    playerCount = (msg.players?.length) || playerCount;
+    remotes.clear();
+    for (const p of msg.players || []) {
+      if (p.id === net.id) {
+        remotes.add({ ...p, name: displayName }, { isSelf: true });
+      } else {
+        remotes.add(p);
+      }
+    }
+    beginPlay({ online: true, spectate: !!msg.spectate });
+  },
+  onRoundEnd(msg) {
+    phase = 'roundEnd';
+    running = false;
+    player.playing = false;
+    controls.unlock();
+    controls.setVisible(false);
+    hud.hideSpectate();
+    if (score > best) {
+      best = Math.floor(score);
+      try { localStorage.setItem(HS_KEY, String(best)); } catch { /* */ }
+    }
+    hud.showRoundEnd({ scores: msg.scores || [], best });
   },
   onJoin(p) {
     remotes.add(p);
@@ -116,14 +184,38 @@ const net = createNetClient({
   onStates(list) {
     remotes.applyStates(list, net.id);
     playerCount = list.length || playerCount;
+    // Hide dead remotes' bodies but keep nametags for living only
+    for (const p of list) {
+      if (p.id === net.id) continue;
+      const r = remotes.remotes.get(p.id);
+      if (!r?.char) continue;
+      const living = p.alive !== false && (p.lives == null || p.lives > 0);
+      r.char.root.visible = living || phase === 'spectate';
+      if (r.label) r.label.element.style.opacity = living ? '1' : '0.35';
+    }
   },
   onClose() {
-    if (running) hud.flash('Disconnected from server');
+    if (running || phase === 'spectate') hud.flash('Disconnected from server');
   },
   onError(err) {
     hud.setNetStatus(err.message || 'Connection failed — start with npm run server');
   },
 });
+
+function applyLobby(lobby) {
+  const me = (lobby.players || []).find((p) => p.id === net.id);
+  lobbyReady = !!me?.ready;
+  hud.updateLobby({
+    filled: lobby.filled,
+    max: lobby.max || 30,
+    endsAt: lobby.endsAt,
+    serverNow: lobby.serverNow,
+    mode: lobby.mode,
+    players: lobby.players,
+    myId: net.id,
+    ready: lobbyReady,
+  });
+}
 
 let welcomed = false;
 let joinTimeout = null;
@@ -137,6 +229,7 @@ try { best = Number(localStorage.getItem(HS_KEY)) || 0; } catch { /* */ }
 
 function wireWorld(w) {
   w.onQuake = (amt) => {
+    if (phase === 'spectate') return;
     player.addShake(amt);
     lightPulse = Math.max(lightPulse, amt);
   };
@@ -146,7 +239,18 @@ wireWorld(world);
 
 player.onDeath = (reason) => {
   deathReason = reason;
-  endRun();
+  if (onlineMode) {
+    // Mid-round: no retry — spectate
+    enterSpectate();
+    net.sendState({
+      x: player.pos.x, y: player.pos.y, z: player.pos.z,
+      facing: player.facing, yaw: player.yaw,
+      moving: 0, run: false, alive: false, lives: 0,
+      score, survived,
+    }, 1);
+  } else {
+    endRunSolo();
+  }
 };
 player.onHurt = (reason, livesLeft) => {
   hud.pulseHurt();
@@ -157,25 +261,39 @@ player.onHurt = (reason, livesLeft) => {
   });
 };
 
-function beginPlay({ online = false } = {}) {
-  // Online: keep world and catch up hazards via roomElapsed.
-  // Offline solo: rebuild so a retry is a fresh quake.
-  if (!online) {
-    if (world?.root) scene.remove(world.root);
-    world = buildWorld(scene);
-    player.world = world;
-    wireWorld(world);
-    roomStartedAt = Date.now();
-  }
+function beginPlay({ online = false, spectate = false } = {}) {
+  onlineMode = online;
+  // Fresh map each round (online + offline)
+  if (world?.root) scene.remove(world.root);
+  world = buildWorld(scene);
+  player.world = world;
+  wireWorld(world);
+  if (!online) roomStartedAt = Date.now();
+  // Online uses server startedAt already set from roundStart
   player.reset();
+  deathReason = '';
+  lightPulse = 0;
+  survived = 0;
+  score = 0;
+  lobbyReady = false;
+  hud.hideLobby();
+
+  if (spectate) {
+    player.alive = false;
+    player.lives = 0;
+    running = true;
+    enterSpectate();
+    bgm.start();
+    return;
+  }
+
   player.playing = true;
   player.alive = true;
   running = true;
-  survived = 0;
-  score = 0;
-  deathReason = '';
-  lightPulse = 0;
+  phase = 'playing';
   hud.showPlaying();
+  hud.hideSpectate();
+  if (player.character?.root) player.character.root.visible = true;
   controls.setVisible(true);
   controls.lock();
   bgm.start();
@@ -186,25 +304,24 @@ function beginPlay({ online = false } = {}) {
 
 function startRun(name) {
   displayName = name;
-  // Already in a room (death → retry): respawn without rejoining
-  if (net.connected && net.id) {
-    beginPlay({ online: true });
-    return;
-  }
+  phase = 'menu';
   welcomed = false;
+  lobbyReady = false;
   hud.setNetStatus('Connecting…');
   if (joinTimeout) clearTimeout(joinTimeout);
   joinTimeout = setTimeout(() => {
     if (welcomed || running) return;
     hud.setNetStatus('No server — playing solo offline');
     hud.flash('Solo offline (run npm run server for multiplayer)');
+    onlineMode = false;
     beginPlay({ online: false });
   }, 2500);
   net.connect(name);
 }
 
-function endRun() {
+function endRunSolo() {
   running = false;
+  phase = 'menu';
   player.playing = false;
   controls.unlock();
   controls.setVisible(false);
@@ -221,10 +338,15 @@ function endRun() {
 }
 
 hud.onStart = (name) => startRun(name);
+hud.onReady = () => {
+  lobbyReady = true;
+  net.sendReady();
+  hud.flash('Ready!');
+};
 hud.showStart();
 
 canvas.addEventListener('click', () => {
-  if (running && !controls.mobile && !player.locked) controls.lock();
+  if (phase === 'playing' && running && !controls.mobile && !player.locked) controls.lock();
 });
 
 const pipeline = new Pipeline(renderer, scene, camera);
@@ -256,7 +378,7 @@ function frame() {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, clock.getDelta());
 
-  if (roomStartedAt) {
+  if (roomStartedAt && (phase === 'playing' || phase === 'spectate')) {
     world.roomElapsed = (Date.now() - roomStartedAt) / 1000;
   }
 
@@ -270,7 +392,7 @@ function frame() {
     fill.intensity = baseFill;
   }
 
-  if (running && player.alive) {
+  if (phase === 'playing' && running && player.alive) {
     survived += dt;
     const speed = Math.hypot(player.vel.x, player.vel.z);
     score = survived * 10 + speed * dt * 2;
@@ -291,6 +413,8 @@ function frame() {
       run: speed > player.walkSpeed * 1.2,
       alive: player.alive,
       lives: player.lives,
+      score,
+      survived,
     }, dt);
 
     remotes.setSelfPose(net.id, displayName, player.pos, player.facing);
@@ -298,11 +422,27 @@ function frame() {
     sun.target.position.set(player.pos.x, 0, player.pos.z);
     sun.position.set(player.pos.x - 52, 62, player.pos.z + 56);
     sun.target.updateMatrixWorld();
-  } else if (running && !player.alive) {
-    // still sync dead pose so others see you down
+  } else if (phase === 'spectate') {
+    // Keep hazards advancing for everyone; spectator doesn't control
+    for (const u of world.updaters) u(dt, player);
+    applySpectateCamera(dt);
+    hud.update({
+      energy: 0, time: survived, score,
+      players: playerCount, lives: 0,
+    });
     net.sendState({
       x: player.pos.x, y: player.pos.y, z: player.pos.z,
-      facing: player.facing, yaw: player.yaw, moving: 0, run: false, alive: false,
+      facing: player.facing, yaw: player.yaw,
+      moving: 0, run: false, alive: false, lives: 0,
+      score, survived,
+    }, dt);
+    sun.target.position.set(0, 0, 0);
+    sun.position.set(-52, 90, 56);
+    sun.target.updateMatrixWorld();
+  } else if (running && !player.alive) {
+    net.sendState({
+      x: player.pos.x, y: player.pos.y, z: player.pos.z,
+      facing: player.facing, yaw: player.yaw, moving: 0, run: false, alive: false, lives: 0,
     }, dt);
     player.update(dt);
   } else {
@@ -311,7 +451,7 @@ function frame() {
 
   remotes.tick(dt);
 
-  if (player.hitFlash > 0.01) {
+  if (player.hitFlash > 0.01 && phase === 'playing') {
     document.body.style.boxShadow = `inset 0 0 ${80 * player.hitFlash}px rgba(200,40,30,${0.45 * player.hitFlash})`;
   } else {
     document.body.style.boxShadow = '';

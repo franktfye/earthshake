@@ -115,6 +115,58 @@
   }
   .toast.on { opacity: 1; transform: translate(-50%, 0); }
 
+  .lobby-panel {
+    position: absolute; left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    width: min(420px, 92vw); max-height: 80vh;
+    padding: 18px 18px 16px;
+    border-radius: 12px;
+    background: rgba(244, 236, 224, 0.94);
+    border: 1.5px solid rgba(46, 42, 40, 0.28);
+    pointer-events: auto;
+    display: none; flex-direction: column; gap: 10px;
+    overflow: hidden;
+  }
+  .lobby-panel.on { display: flex; }
+  .lobby-head { display: flex; justify-content: space-between; align-items: baseline; }
+  .lobby-title { font-weight: 700; font-size: 18px; letter-spacing: .04em; }
+  .lobby-slots { font-weight: 600; font-variant-numeric: tabular-nums; color: #5a5048; }
+  .lobby-countdown {
+    font-size: 14px; font-weight: 600; color: #a04828;
+    padding: 8px 10px; border-radius: 8px;
+    background: rgba(160, 72, 40, 0.1);
+  }
+  .lobby-list {
+    list-style: none; margin: 0; padding: 0;
+    overflow: auto; max-height: 42vh;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
+  }
+  .lobby-list li {
+    font-size: 12px; padding: 6px 8px; border-radius: 6px;
+    background: rgba(46, 42, 40, 0.06);
+    display: flex; justify-content: space-between; gap: 6px;
+  }
+  .lobby-list li.empty { color: #9a9088; font-style: italic; }
+  .lobby-list li.is-ready { background: rgba(80, 140, 70, 0.18); }
+  .lobby-list li.is-me { outline: 1.5px solid rgba(160, 72, 40, 0.55); }
+  .lobby-list .st { color: #6a5a48; font-weight: 600; }
+  .lobby-ready {
+    margin-top: 4px; padding: 12px 14px; border-radius: 8px;
+    border: none; cursor: pointer;
+    background: #c84830; color: #fff; font: 700 14px/1 inherit;
+  }
+  .lobby-ready:disabled { opacity: 0.55; cursor: default; background: #8a7060; }
+
+  .spectate-banner {
+    position: absolute; left: 50%; top: 14px; transform: translateX(-50%);
+    padding: 8px 16px; border-radius: 999px;
+    background: rgba(46, 42, 40, 0.78); color: #f4ece0;
+    font-size: 13px; font-weight: 600;
+    opacity: 0; visibility: hidden; pointer-events: none;
+    transition: opacity .25s ease;
+  }
+  .spectate-banner.on { opacity: 1; visibility: visible; }
+
   .overlay {
     position: absolute; inset: 0;
     display: flex; align-items: center; justify-content: center;
