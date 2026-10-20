@@ -39,12 +39,22 @@ export function createDisaster(world, opts = {}) {
   const lipMat = cel({ color: PAL.voidLip, bands: 2, tint: 0x2a2420 });
   const rubbleMat = cel({ color: PAL.rubble, bands: 3, tint: 0x5a5048 });
   const shadowMatBase = flat({
-    color: PAL.dropShadow,
+    color: 0x050508,
+    transparent: true,
+    opacity: 0.72,
+    fog: false,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    toneMapped: false,
+  });
+  const shadowRimMat = flat({
+    color: PAL.danger,
     transparent: true,
     opacity: 0.55,
     fog: false,
     depthWrite: false,
     side: THREE.DoubleSide,
+    toneMapped: false,
   });
 
   function reset() {
@@ -206,14 +216,26 @@ export function createDisaster(world, opts = {}) {
       const s = rng.range(0.45, 0.95);
       const radius = s * 0.55;
 
-      const shadow = new THREE.Mesh(
-        new THREE.CircleGeometry(radius * 1.15, 24),
+      const shadow = new THREE.Group();
+      shadow.position.set(x, 0.05, z);
+      const blot = new THREE.Mesh(
+        new THREE.CircleGeometry(radius * 1.2, 28),
         shadowMatBase.clone()
       );
-      shadow.rotation.x = -Math.PI / 2;
-      shadow.position.set(x, 0.04, z);
-      shadow.material.opacity = 0.25;
+      blot.rotation.x = -Math.PI / 2;
+      blot.material.opacity = 0.35;
+      const rim = new THREE.Mesh(
+        new THREE.RingGeometry(radius * 1.05, radius * 1.35, 28),
+        shadowRimMat.clone()
+      );
+      rim.rotation.x = -Math.PI / 2;
+      rim.position.y = 0.01;
+      rim.material.opacity = 0.35;
+      shadow.add(blot);
+      shadow.add(rim);
       shadow.scale.setScalar(0.55);
+      shadow.userData.blot = blot;
+      shadow.userData.rim = rim;
       world.add(shadow);
 
       const mat = cel({
@@ -367,10 +389,13 @@ export function createDisaster(world, opts = {}) {
 
       if (d.phase === 'warn') {
         const u = Math.min(1, age / d.telegraph);
-        // Grow + darken as impact nears
-        const pulse = 0.92 + Math.sin(elapsed * 10) * 0.06;
+        // Grow + darken as impact nears (~2s floor telegraph)
+        const pulse = 0.94 + Math.sin(elapsed * 11) * 0.06;
         d.shadow.scale.setScalar((0.55 + u * 0.55) * pulse);
-        d.shadow.material.opacity = 0.28 + u * 0.5;
+        const blot = d.shadow.userData.blot;
+        const rim = d.shadow.userData.rim;
+        if (blot) blot.material.opacity = 0.38 + u * 0.5;
+        if (rim) rim.material.opacity = 0.35 + u * 0.45;
         if (age >= d.telegraph) beginDropFall(d);
         continue;
       }
@@ -380,8 +405,10 @@ export function createDisaster(world, opts = {}) {
         d.mesh.rotation.x += d.spin.x * dt;
         d.mesh.rotation.y += d.spin.y * dt;
         d.mesh.rotation.z += d.spin.z * dt;
-        // Keep shadow locked under landing; flash brighter at impact
-        d.shadow.material.opacity = 0.75;
+        const blot = d.shadow.userData.blot;
+        const rim = d.shadow.userData.rim;
+        if (blot) blot.material.opacity = 0.88;
+        if (rim) rim.material.opacity = 0.8;
 
         if (player.alive) {
           const dx = d.mesh.position.x - player.pos.x;
@@ -403,7 +430,10 @@ export function createDisaster(world, opts = {}) {
           }
           d.phase = 'done';
           d.doneAt = elapsed;
-          d.shadow.material.opacity = 0.15;
+          const blot = d.shadow.userData.blot;
+          const rim = d.shadow.userData.rim;
+          if (blot) blot.material.opacity = 0.2;
+          if (rim) rim.material.opacity = 0.15;
         }
       }
 
