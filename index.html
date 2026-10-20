@@ -35,35 +35,24 @@
     75% { transform: translateX(4px); }
   }
   .lives-row {
-    display: flex; gap: 8px; align-items: center;
+    display: flex; gap: 7px; align-items: center;
     margin-bottom: 8px; min-height: 18px;
   }
-  /* Cel-style hearts via CSS (two circles + rotated square) — not emoji */
+  /* Cel-style heart via clip-path — exactly one glyph per life */
   .heart {
-    position: relative; width: 16px; height: 14px;
+    width: 18px; height: 16px;
     display: inline-block; flex-shrink: 0;
-    filter: drop-shadow(0 1px 0 rgba(46, 42, 40, 0.35));
-    transition: transform .15s ease, opacity .15s ease, filter .15s ease;
+    background: linear-gradient(160deg, #ef6a55 0%, #c83028 65%, #8e2018 100%);
+    clip-path: path('M9 14.5 C9 14.5 1.5 9.2 1.5 5.2 C1.5 2.9 3.2 1.4 5.2 1.4 C6.7 1.4 8.1 2.2 9 3.5 C9.9 2.2 11.3 1.4 12.8 1.4 C14.8 1.4 16.5 2.9 16.5 5.2 C16.5 9.2 9 14.5 9 14.5 Z');
+    filter: drop-shadow(0 1px 0 rgba(46, 42, 40, 0.4));
+    transition: transform .15s ease, opacity .15s ease, background .15s ease;
   }
-  .heart::before,
-  .heart::after {
-    content: ''; position: absolute;
-    width: 10px; height: 16px;
-    border-radius: 10px 10px 0 0;
-    background: #d4483a;
-    top: 0;
+  .heart.off {
+    opacity: 0.9;
+    background: rgba(46, 42, 40, 0.2);
+    box-shadow: inset 0 0 0 1px rgba(46, 42, 40, 0.35);
   }
-  .heart::before { left: 0; transform: rotate(-45deg); transform-origin: 5px 16px; }
-  .heart::after { left: 6px; transform: rotate(45deg); transform-origin: 5px 16px; }
-  .heart.on::before, .heart.on::after {
-    background: linear-gradient(160deg, #ef6a55 0%, #c83028 70%, #8e2018 100%);
-  }
-  .heart.off { opacity: 0.55; }
-  .heart.off::before, .heart.off::after {
-    background: rgba(46, 42, 40, 0.22);
-    box-shadow: inset 0 0 0 1.5px rgba(46, 42, 40, 0.35);
-  }
-  .vitals.hurt .heart.on { transform: scale(1.12); }
+  .vitals.hurt .heart.on { transform: scale(1.14); }
   .vital-row { display: flex; align-items: center; gap: 10px; }
   .vital-label {
     font-size: 11px; font-weight: 700; letter-spacing: .08em;
