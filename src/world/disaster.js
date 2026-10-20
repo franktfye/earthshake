@@ -124,39 +124,62 @@ export function createDisaster(world, opts = {}) {
     for (const t of world.punchTiles || []) t.mesh.visible = true;
   }
 
-  /** Dark ground shadow (1s telegraph). Soft ellipse + optional thin danger rim. */
+  /**
+   * 1s telegraph:
+   * - Falling debris: dark filled ground SHADOW (required).
+   * - Crack warn: ring only (not a filled disc — that was mistaken for a flat hole).
+   */
   function makeWarnShadow(x, z, radius, { crack = false } = {}) {
     const g = new THREE.Group();
     g.position.set(x, 0.055, z);
-    // Soft stacked discs = readable dark shadow (not a pink sticker)
+    if (crack) {
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(radius * 0.72, radius * 1.08, 48),
+        shadowRimMat.clone()
+      );
+      ring.rotation.x = -Math.PI / 2;
+      ring.material.opacity = 0.7;
+      const inner = new THREE.Mesh(
+        new THREE.RingGeometry(radius * 0.35, radius * 0.55, 40),
+        shadowMatBase.clone()
+      );
+      inner.rotation.x = -Math.PI / 2;
+      inner.position.y = 0.008;
+      inner.material.opacity = 0.35;
+      g.add(ring);
+      g.add(inner);
+      g.userData.blot = inner;
+      g.userData.soft = ring;
+      g.userData.rim = ring;
+      world.add(g);
+      return g;
+    }
     const blot = new THREE.Mesh(
       new THREE.CircleGeometry(radius, 36),
       shadowMatBase.clone()
     );
     blot.rotation.x = -Math.PI / 2;
-    blot.material.opacity = crack ? 0.55 : 0.72;
+    blot.material.opacity = 0.78;
     const soft = new THREE.Mesh(
       new THREE.CircleGeometry(radius * 1.25, 36),
       shadowMatBase.clone()
     );
     soft.rotation.x = -Math.PI / 2;
     soft.position.y = -0.005;
-    soft.material.opacity = crack ? 0.28 : 0.35;
+    soft.material.opacity = 0.38;
+    const rim = new THREE.Mesh(
+      new THREE.RingGeometry(radius * 1.05, radius * 1.22, 36),
+      shadowRimMat.clone()
+    );
+    rim.rotation.x = -Math.PI / 2;
+    rim.position.y = 0.012;
+    rim.material.opacity = 0.35;
     g.add(soft);
     g.add(blot);
-    if (!crack) {
-      const rim = new THREE.Mesh(
-        new THREE.RingGeometry(radius * 1.05, radius * 1.22, 36),
-        shadowRimMat.clone()
-      );
-      rim.rotation.x = -Math.PI / 2;
-      rim.position.y = 0.012;
-      rim.material.opacity = 0.35;
-      g.add(rim);
-      g.userData.rim = rim;
-    }
+    g.add(rim);
     g.userData.blot = blot;
     g.userData.soft = soft;
+    g.userData.rim = rim;
     world.add(g);
     return g;
   }
@@ -472,7 +495,7 @@ export function createDisaster(world, opts = {}) {
 
   function openFissure(outline, x, z) {
     const id = ++holeSeq;
-    const punchR = outline.maxR * 1.06;
+      const punchR = outline.maxR * 1.2; // slightly oversized so tiles fully clear
     const hole = {
       id, x, z,
       kind: outline.kind,
