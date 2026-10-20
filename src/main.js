@@ -135,6 +135,14 @@ player.onDeath = (reason) => {
   deathReason = reason;
   endRun();
 };
+player.onHurt = (reason, livesLeft) => {
+  hud.pulseHurt();
+  hud.flash(livesLeft === 1 ? 'Last life!' : `${livesLeft} lives left`);
+  hud.update({
+    energy: player.energy, time: survived, score,
+    players: playerCount, lives: player.lives,
+  });
+};
 
 function beginPlay({ online = false } = {}) {
   // Online: keep world and catch up hazards via roomElapsed.
@@ -254,7 +262,10 @@ function frame() {
     score = survived * 10 + speed * dt * 2;
     for (const u of world.updaters) u(dt, player);
     player.update(dt);
-    hud.update({ energy: player.energy, time: survived, score, players: playerCount });
+    hud.update({
+      energy: player.energy, time: survived, score,
+      players: playerCount, lives: player.lives,
+    });
 
     net.sendState({
       x: player.pos.x,
@@ -265,6 +276,7 @@ function frame() {
       moving: speed,
       run: speed > player.walkSpeed * 1.2,
       alive: player.alive,
+      lives: player.lives,
     }, dt);
 
     remotes.setSelfPose(net.id, displayName, player.pos, player.facing);

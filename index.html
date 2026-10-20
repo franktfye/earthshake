@@ -28,6 +28,42 @@
     transition: opacity .25s ease, visibility .25s ease;
   }
   .vitals.on { opacity: 1; visibility: visible; }
+  .vitals.hurt { animation: vitals-hurt .4s ease; }
+  @keyframes vitals-hurt {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-4px); }
+    75% { transform: translateX(4px); }
+  }
+  .lives-row {
+    display: flex; gap: 8px; align-items: center;
+    margin-bottom: 8px; min-height: 18px;
+  }
+  /* Cel-style hearts via CSS (two circles + rotated square) — not emoji */
+  .heart {
+    position: relative; width: 16px; height: 14px;
+    display: inline-block; flex-shrink: 0;
+    filter: drop-shadow(0 1px 0 rgba(46, 42, 40, 0.35));
+    transition: transform .15s ease, opacity .15s ease, filter .15s ease;
+  }
+  .heart::before,
+  .heart::after {
+    content: ''; position: absolute;
+    width: 10px; height: 16px;
+    border-radius: 10px 10px 0 0;
+    background: #d4483a;
+    top: 0;
+  }
+  .heart::before { left: 0; transform: rotate(-45deg); transform-origin: 5px 16px; }
+  .heart::after { left: 6px; transform: rotate(45deg); transform-origin: 5px 16px; }
+  .heart.on::before, .heart.on::after {
+    background: linear-gradient(160deg, #ef6a55 0%, #c83028 70%, #8e2018 100%);
+  }
+  .heart.off { opacity: 0.55; }
+  .heart.off::before, .heart.off::after {
+    background: rgba(46, 42, 40, 0.22);
+    box-shadow: inset 0 0 0 1.5px rgba(46, 42, 40, 0.35);
+  }
+  .vitals.hurt .heart.on { transform: scale(1.12); }
   .vital-row { display: flex; align-items: center; gap: 10px; }
   .vital-label {
     font-size: 11px; font-weight: 700; letter-spacing: .08em;

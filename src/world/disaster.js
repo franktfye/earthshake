@@ -123,8 +123,25 @@ export function createDisaster(world, opts = {}) {
     // Bottom abyss
     g.add(box(w * 0.68, 0.1, depth * 0.68, voidMat, 0, -2.35, 0));
 
+    // Stepped ledge inside for depth readability
+    g.add(box(w * 0.82, 0.12, depth * 0.82, voidInnerMat, 0, -0.55, 0));
+    g.add(box(w * 0.62, 0.1, depth * 0.62, voidMat, 0, -1.05, 0));
+
+    // Radial crack spokes from the mouth (ink-readable edge breaks)
+    const crackMat = flat({ color: 0x060608, fog: true, toneMapped: false });
+    for (let i = 0; i < 5; i++) {
+      const ang = (i / 5) * Math.PI * 2 + rng.range(-0.2, 0.2);
+      const len = rng.range(0.55, 1.15);
+      const spoke = box(len, 0.05, 0.12, crackMat,
+        Math.cos(ang) * (w * 0.42 + len * 0.35),
+        0.03,
+        Math.sin(ang) * (depth * 0.42 + len * 0.35));
+      spoke.rotation.y = ang;
+      g.add(spoke);
+    }
+
     // Jagged rim / debris lip around the mouth
-    const rimBits = 7 + rng.int(0, 4);
+    const rimBits = 9 + rng.int(0, 4);
     for (let i = 0; i < rimBits; i++) {
       const t = i / rimBits;
       const ang = t * Math.PI * 2 + rng.range(-0.12, 0.12);
@@ -269,7 +286,8 @@ export function createDisaster(world, opts = {}) {
     world.add(mesh);
     d.mesh = mesh;
     d.phase = 'fall';
-    d.vy = -FALL_SPEED * rng.range(0.85, 1.1);
+    d.vy = -FALL_SPEED * rng.range(0.9, 1.15);
+    world.onQuake?.(0.18); // camera nudge as object commits
   }
 
   function collapseBuilding(b) {
@@ -394,8 +412,8 @@ export function createDisaster(world, opts = {}) {
         d.shadow.scale.setScalar((0.55 + u * 0.55) * pulse);
         const blot = d.shadow.userData.blot;
         const rim = d.shadow.userData.rim;
-        if (blot) blot.material.opacity = 0.38 + u * 0.5;
-        if (rim) rim.material.opacity = 0.35 + u * 0.45;
+        if (blot) blot.material.opacity = 0.5 + u * 0.42;
+        if (rim) rim.material.opacity = 0.45 + u * 0.5;
         if (age >= d.telegraph) beginDropFall(d);
         continue;
       }
@@ -414,19 +432,28 @@ export function createDisaster(world, opts = {}) {
           const dx = d.mesh.position.x - player.pos.x;
           const dy = d.mesh.position.y - (player.pos.y + 1.0);
           const dz = d.mesh.position.z - player.pos.z;
-          if (Math.hypot(dx, dy, dz) < d.radius + 0.5) player.kill('debris');
+        if (Math.hypot(dx, dy, dz) < d.radius + 0.5) {
+          player.takeHit('debris', {
+            kx: (player.pos.x - d.x) * 3,
+            kz: (player.pos.z - d.z) * 3,
+          });
         }
+      }
 
         if (d.mesh.position.y <= d.s * 0.4) {
           d.mesh.position.y = d.s * 0.35;
-          world.juice?.burstDust(d.x, 0.3, d.z, 10, 0.9);
-          world.juice?.impactRing(d.x, d.z, PAL.orange);
-          world.onQuake?.(0.28);
-          // Ground splash kill
+          // Impact squash + juice
+          d.mesh.scale.set(1.35, 0.55, 1.35);
+          d.squash = 0.55;
+          world.juice?.burstDust(d.x, 0.35, d.z, 16, 1.25);
+          world.juice?.impactRing(d.x, d.z, PAL.danger);
+          world.onQuake?.(0.42);
           if (player.alive) {
             const dx = d.x - player.pos.x;
             const dz = d.z - player.pos.z;
-            if (Math.hypot(dx, dz) < d.radius + 0.55) player.kill('debris');
+            if (Math.hypot(dx, dz) < d.radius + 0.55) {
+              player.takeHit('debris', { kx: dx * -2.5, kz: dz * -2.5 });
+            }
           }
           d.phase = 'done';
           d.doneAt = elapsed;
@@ -460,7 +487,12 @@ export function createDisaster(world, opts = {}) {
         const dx = d.mesh.position.x - pos.x;
         const dy = d.mesh.position.y - (pos.y + 1.0);
         const dz = d.mesh.position.z - pos.z;
-        if (Math.hypot(dx, dy, dz) < d.radius + 0.45) player.kill('debris');
+        if (Math.hypot(dx, dy, dz) < d.radius + 0.45) {
+          player.takeHit('debris', {
+            kx: (pos.x - d.mesh.position.x) * 2.5,
+            kz: (pos.z - d.mesh.position.z) * 2.5,
+          });
+        }
       }
       if (d.life <= 0 || d.mesh.position.y < -1) {
         world.root.remove(d.mesh);
@@ -474,7 +506,7 @@ export function createDisaster(world, opts = {}) {
       if (player.alive &&
           pos.x > z.x0 && pos.x < z.x1 &&
           pos.z > z.z0 && pos.z < z.z1) {
-        player.kill(z.kind === 'collapse' ? 'collapse' : 'debris');
+        player.takeHit(z.kind === 'collapse' ? 'collapse' : 'debris', { shake: 1.1 });
       }
       if (z.life <= 0) world.collapseZones.splice(i, 1);
     }

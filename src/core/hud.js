@@ -15,6 +15,11 @@ export function createHud() {
 
   const root = el('div', 'hud');
   const vitals = el('div', 'vitals', root, `
+    <div class="lives-row" aria-label="Lives">
+      <span class="heart on" data-i="0"></span>
+      <span class="heart on" data-i="1"></span>
+      <span class="heart on" data-i="2"></span>
+    </div>
     <div class="vital-row">
       <span class="vital-label">ENERGY</span>
       <div class="energy-track"><div class="energy-fill"></div></div>
@@ -29,6 +34,7 @@ export function createHud() {
   const timeEl = vitals.querySelector('.time');
   const scoreEl = vitals.querySelector('.score');
   const playersEl = vitals.querySelector('.players');
+  const hearts = [...vitals.querySelectorAll('.heart')];
 
   const hint = el('div', 'hint', root, '');
   const toast = el('div', 'toast', root, '');
@@ -54,7 +60,7 @@ export function createHud() {
         <h1 id="menu-title">After<span>shock</span></h1>
         <p class="menu-description start-only">
           Enter a name and run. The town comes apart on a shared timeline —
-          dodge shadowed falling debris, collapses, and black fissures.
+          Three lives. Dodge shadowed debris, collapses, and black fissures.
         </p>
         <p class="menu-description dead-only">
           <span class="death-reason">—</span><br/>
@@ -163,12 +169,24 @@ export function createHud() {
     vitals.classList.remove('on');
   }
 
-  function update({ energy, time, score, players }) {
+  function update({ energy, time, score, players, lives }) {
     energyFill.style.width = `${Math.round(clamp01(energy) * 100)}%`;
     energyFill.classList.toggle('low', energy < 0.28);
     timeEl.textContent = formatTime(time);
     scoreEl.textContent = String(Math.floor(score));
     if (players != null) playersEl.textContent = `${players}/30`;
+    if (lives != null) {
+      for (let i = 0; i < hearts.length; i++) {
+        hearts[i].classList.toggle('on', i < lives);
+        hearts[i].classList.toggle('off', i >= lives);
+      }
+    }
+  }
+
+  function pulseHurt() {
+    vitals.classList.add('hurt');
+    clearTimeout(pulseHurt._t);
+    pulseHurt._t = setTimeout(() => vitals.classList.remove('hurt'), 420);
   }
 
   function flash(msg) {
@@ -195,6 +213,7 @@ export function createHud() {
     showDead,
     showFull,
     update,
+    pulseHurt,
     flash,
     setHint,
     setNetStatus,

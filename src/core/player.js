@@ -33,9 +33,12 @@ export class Player {
 
     this.energy = 1;
     this.maxEnergy = 1;
+    this.maxLives = 3;
+    this.lives = this.maxLives;
     this.alive = true;
     this.playing = false;
     this.facing = this.yaw;
+    this.invuln = 0;
 
     this.drainWalk = 0.045;
     this.drainRun = 0.11;
@@ -72,6 +75,7 @@ export class Player {
     this.character.root.add(this.footRing);
 
     this.onDeath = null;
+    this.onHurt = null;
     this.applyCamera(0);
   }
 
@@ -87,19 +91,54 @@ export class Player {
     this.vel.set(0, 0, 0);
     this.bob = 0;
     this.energy = 1;
+    this.lives = this.maxLives;
     this.alive = true;
+    this.invuln = 0;
     this.shake = 0;
     this.hitFlash = 0;
     this._camReady = false;
     this.character.root.visible = true;
+    this.character.resetScale?.();
     this.pos.y = this.world.heightAt(this.pos.x, this.pos.z);
     this.character.update(this.pos, this.facing, 0, false, 0.016);
     this.applyCamera(0);
   }
 
+  /**
+   * Lethal contact: spend a life. Brief invuln + knock if lives remain;
+   * at 0 lives → game over (same death overlay as before).
+   */
+  takeHit(reason = 'dead', opts = {}) {
+    if (!this.alive || this.invuln > 0) return false;
+    this.lives = Math.max(0, this.lives - 1);
+    this.hitFlash = 1;
+    this.addShake(opts.shake ?? 0.85);
+    this.invuln = opts.invuln ?? 1.75;
+
+    // Knock away from hazard or opposite travel
+    const kx = opts.kx ?? (-Math.sign(this.vel.x || 1) * 4.5);
+    const kz = opts.kz ?? (-Math.sign(this.vel.z || 1) * 4.5);
+    this.vel.x += kx;
+    this.vel.z += kz;
+
+    if (opts.rescue) {
+      this.pos.x = opts.rescue.x;
+      this.pos.z = opts.rescue.z;
+      this.pos.y = this.world.heightAt(this.pos.x, this.pos.z);
+    }
+
+    if (this.lives <= 0) {
+      this.kill(reason);
+      return true;
+    }
+    this.onHurt?.(reason, this.lives);
+    return false;
+  }
+
   kill(reason = 'dead') {
     if (!this.alive) return;
     this.alive = false;
+    this.lives = 0;
     this.vel.set(0, 0, 0);
     this.hitFlash = 1;
     this.addShake(0.9);
@@ -130,11 +169,23 @@ export class Player {
   }
 
   update(dt) {
+    this.invuln = Math.max(0, this.invuln - dt);
+    this.hitFlash = Math.max(0, this.hitFlash - dt * 1.5);
+
     if (!this.alive || !this.playing) {
       this.character.update(this.pos, this.facing, 0, false, dt);
+      this.character.resetScale?.();
       this.applyCamera(0);
-      this.hitFlash = Math.max(0, this.hitFlash - dt);
       return;
+    }
+
+    // Blink while invulnerable
+    if (this.invuln > 0) {
+      this.character.root.visible = Math.sin(performance.now() * 0.028) > 0;
+      this.character.flashHurt?.(this.hitFlash);
+    } else {
+      this.character.root.visible = true;
+      this.character.resetScale?.();
     }
 
     const look = this.controls.sample();
@@ -190,7 +241,32 @@ export class Player {
     if (this.world.inKillHole(this.pos.x, this.pos.z)) {
       this.pos.y -= 8 * dt;
       this.character.update(this.pos, this.facing, 0, false, dt);
-      if (this.pos.y < -2) this.kill('fell');
+      if (this.pos.y < -1.2) {
+        // Rescue to nearest hole edge if lives remain
+        let rescue = null;
+        for (const h of this.world.holes) {
+          if (this.pos.x >= h.x0 && this.pos.x <= h.x1 &&
+              this.pos.z >= h.z0 && this.pos.z <= h.z1) {
+            const cx = (h.x0 + h.x1) / 2;
+            const cz = (h.z0 + h.z1) / 2;
+            const dx = this.pos.x - cx;
+            const dz = this.pos.z - cz;
+            const len = Math.hypot(dx, dz) || 1;
+            rescue = {
+              x: cx + (dx / len) * (Math.max(h.w, h.d) * 0.5 + 1.1),
+              z: cz + (dz / len) * (Math.max(h.w, h.d) * 0.5 + 1.1),
+            };
+            break;
+          }
+        }
+        this.takeHit('fell', {
+          shake: 1.0,
+          invuln: 2.0,
+          rescue: rescue || { x: this.spawn.pos.x, z: this.spawn.pos.z },
+          kx: 0,
+          kz: 0,
+        });
+      }
       this.applyCamera(0);
       return;
     }
@@ -207,7 +283,6 @@ export class Player {
 
     this.bob += dt * moving * (wantRun ? 8.2 : 6.4);
     this.shake = Math.max(0, this.shake - dt * 2.2);
-    this.hitFlash = Math.max(0, this.hitFlash - dt * 1.5);
     this.footRing.material.opacity = 0.35 + Math.min(moving / this.runSpeed, 1) * 0.35;
 
     this.character.update(this.pos, this.facing, moving, wantRun, dt);

@@ -46,6 +46,7 @@ function publicPlayer(p) {
     facing: p.facing, yaw: p.yaw,
     moving: p.moving, run: p.run,
     alive: p.alive,
+    lives: p.lives ?? 3,
   };
 }
 
@@ -113,6 +114,7 @@ wss.on('connection', (ws) => {
         moving: 0,
         run: false,
         alive: true,
+        lives: 3,
       };
       players.set(id, me);
       send(ws, {
@@ -139,6 +141,7 @@ wss.on('connection', (ws) => {
       me.moving = Number(msg.moving) || 0;
       me.run = !!msg.run;
       me.alive = msg.alive !== false;
+      if (msg.lives != null) me.lives = Math.max(0, Math.min(3, Number(msg.lives) || 0));
       return;
     }
   });
