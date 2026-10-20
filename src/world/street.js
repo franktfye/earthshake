@@ -61,16 +61,16 @@ export function paveLot(ctx, { x0, x1, z0, z1, y = 0.04 }) {
  * Tile road + dirt under the cross so fissures can hide tiles and reveal
  * the open black shaft (whole-slab asphalt cannot be punched reliably).
  */
-function addPunchTile(ctx, list, mesh, x, z, pad) {
+function addPunchTile(ctx, list, mesh, x, z, hw, hd) {
   mesh.receiveShadow = true;
   ctx.add(mesh);
-  list.push({ mesh, x, z, pad });
+  list.push({ mesh, x, z, hw, hd });
 }
 
 export function buildStreet(ctx) {
   const m = mats();
   const H = MAP.half;
-  const TILE = 2.0;
+  const TILE = 1.25; // finer grid → cleaner circular cut around fissures
   const punchTiles = [];
   ctx.punchTiles = punchTiles;
 
@@ -89,9 +89,9 @@ export function buildStreet(ctx) {
     const cx = x + TILE / 2;
     const w = Math.min(TILE, H - x);
     const dirt = box(w, 0.06, roadZ + 0.4, m.dirt, cx, -0.05, 0);
-    addPunchTile(ctx, punchTiles, dirt, cx, 0, Math.hypot(w, roadZ) * 0.55);
+    addPunchTile(ctx, punchTiles, dirt, cx, 0, w / 2, (roadZ + 0.4) / 2);
     const asphalt = box(w, 0.1, roadZ, m.road, cx, 0.05, 0);
-    addPunchTile(ctx, punchTiles, asphalt, cx, 0, Math.hypot(w, roadZ) * 0.55);
+    addPunchTile(ctx, punchTiles, asphalt, cx, 0, w / 2, roadZ / 2);
   }
   ctx.platform({ x0: -H, x1: H, z0: -ROAD_HALF, z1: ROAD_HALF, top: 0.1 });
 
@@ -102,9 +102,9 @@ export function buildStreet(ctx) {
     if (Math.abs(cz) < ROAD_HALF + TILE * 0.5) continue; // overlap with main
     const d = Math.min(TILE, H - z);
     const dirt = box(roadX + 0.4, 0.06, d, m.dirt, 0, -0.05, cz);
-    addPunchTile(ctx, punchTiles, dirt, 0, cz, Math.hypot(roadX, d) * 0.55);
+    addPunchTile(ctx, punchTiles, dirt, 0, cz, (roadX + 0.4) / 2, d / 2);
     const asphalt = box(roadX, 0.1, d, m.road, 0, 0.05, cz);
-    addPunchTile(ctx, punchTiles, asphalt, 0, cz, Math.hypot(roadX, d) * 0.55);
+    addPunchTile(ctx, punchTiles, asphalt, 0, cz, roadX / 2, d / 2);
   }
   ctx.platform({ x0: -ROAD_HALF, x1: ROAD_HALF, z0: -H, z1: H, top: 0.1 });
 
@@ -131,7 +131,7 @@ export function buildStreet(ctx) {
 
   for (let x = -H + 2; x < H; x += 3.5) {
     const line = box(1.4, 0.02, 0.1, m.line, x, 0.11, 0);
-    addPunchTile(ctx, punchTiles, line, x, 0, 1.0);
+    addPunchTile(ctx, punchTiles, line, x, 0, 0.7, 0.05);
   }
 
   // perimeter

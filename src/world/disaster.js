@@ -61,6 +61,14 @@ export function createDisaster(world, opts = {}) {
   // Punch asphalt / dirt so the open funnel is actually visible
   for (const mat of getPunchableGroundMats()) patchGroundMaterial(mat);
 
+  function circleHitsAabb(hx, hz, hr, tx, tz, hw, hd) {
+    const cx = Math.min(Math.max(hx, tx - hw), tx + hw);
+    const cz = Math.min(Math.max(hz, tz - hd), tz + hd);
+    const dx = hx - cx;
+    const dz = hz - cz;
+    return dx * dx + dz * dz < hr * hr;
+  }
+
   function syncGroundPunches() {
     const list = [];
     for (const h of world.holes) {
@@ -68,12 +76,14 @@ export function createDisaster(world, opts = {}) {
       list.push({ x: h.x, z: h.z, radius: r });
     }
     setHolePunches(list);
-    // Physically hide road/dirt/line tiles under each fissure (reliable cut)
+    // Hide every road/dirt/line tile whose AABB intersects a fissure circle
     const tiles = world.punchTiles || [];
     for (const t of tiles) {
+      const hw = t.hw ?? 1;
+      const hd = t.hd ?? 1;
       let hide = false;
       for (const h of list) {
-        if (Math.hypot(t.x - h.x, t.z - h.z) < h.radius + (t.pad || 1.2)) {
+        if (circleHitsAabb(h.x, h.z, h.radius, t.x, t.z, hw, hd)) {
           hide = true;
           break;
         }
