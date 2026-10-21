@@ -1,9 +1,10 @@
 import * as THREE from 'three';
-import { rngKit, box } from '../core/util.js';
+import { box, mergeStatic } from '../core/util.js';
 import { cel } from '../core/toon.js';
 import { PAL } from '../core/palette.js';
 import {
-  buildStreet, groundY, MAP, ROAD_HALF, WALK_W, FRONT_APRON, frontCenter,
+  buildStreet, addLane, MAP, ROADS, PLAZA, WALK_W, FRONT_APRON, LOT_TOP,
+  corridorHalf, subtractIntervals,
 } from './street.js';
 import { makeHouse, makeShop } from './buildings.js';
 import { buildStreetProps } from './props.js';
@@ -12,7 +13,12 @@ import { createJuice } from './juice.js';
 
 export const WORLD_SEED = 20241019;
 
-export function buildWorld(scene) {
+/**
+ * @param {THREE.Scene} scene
+ * @param {{ seed?: number }} [opts] seed drives the hazard timeline only;
+ *   the town layout is fixed so every client builds the same streets.
+ */
+export function buildWorld(scene, opts = {}) {
   const root = new THREE.Group();
   root.name = 'world';
   scene.add(root);
@@ -24,8 +30,6 @@ export function buildWorld(scene) {
   const collapseZones = [];
   const buildings = [];
   const updaters = [];
-
-  const rng = rngKit(WORLD_SEED);
 
   const ctx = {
     scene,
@@ -46,9 +50,26 @@ export function buildWorld(scene) {
   };
 
   buildStreet(ctx);
-  placeBuildings(ctx, buildings, rng);
+  placeBuildings(ctx, buildings);
   buildStreetProps(ctx);
-  const punchTiles = ctx.punchTiles || [];
+  // Draw-call diet: everything that never moves or disappears becomes one
+  // mesh per material; collapsible buildings + loose props stay separate.
+  const keep = new Set((ctx.looseProps || []).map((l) => l.obj));
+  const staticBatch = new THREE.Group();
+  staticBatch.name = 'static';
+  mergeStatic(root.children.filter((c) => !keep.has(c)), staticBatch);
+  root.add(staticBatch);
+  for (const lp of ctx.looseProps || []) {
+    const holder = lp.obj;
+    const kids = holder.children.slice();
+    holder.updateMatrixWorld(true);
+    mergeStatic(kids, holder);
+  }
+  for (const block of ctx.blocks) rebuildBlock(block, root);
+  // Loose clutter is solid but must not stop fissures (it tumbles in instead)
+  const staticColliders = colliders.filter((c) => !c.ref?.loose);
+  const openRects = ctx.openRects;
+  const avoid = ctx.avoid || [];
 
   const bounds = {
     x0: -MAP.half + 0.6,
@@ -57,20 +78,31 @@ export function buildWorld(scene) {
     z1: MAP.half - 0.6,
   };
 
-  function heightAt(x, z, fromY) {
-    // Shape-matched fissure fall (circle/organic) — never AABB square
-    for (const h of holes) {
-      if (typeof h.contains === 'function') {
-        if (h.contains(x, z)) return h.bottom ?? -2.5;
-      } else if (x >= h.x0 && x <= h.x1 && z >= h.z0 && z <= h.z1) {
-        return h.bottom ?? -2.5;
-      }
+  /** Top of the paved surface at (x, z), ignoring holes. */
+  function surfaceAt(x, z) {
+    let y = 0;
+    for (const p of platforms) {
+      if (x < p.x0 || x > p.x1 || z < p.z0 || z > p.z1) continue;
+      if (p.top > y) y = p.top;
     }
+    return y;
+  }
+
+  function holeAt(x, z) {
+    for (const h of holes) {
+      if (h.contains(x, z)) return h;
+    }
+    return null;
+  }
+
+  function heightAt(x, z, fromY) {
+    const h = holeAt(x, z);
+    if (h) return h.bottom;
     for (const c of cuts) {
       if (c.skipHeight) continue;
       if (x >= c.x0 && x <= c.x1 && z >= c.z0 && z <= c.z1) return c.top ?? -2.5;
     }
-    let y = groundY(z);
+    let y = 0;
     const feet = fromY ?? y;
     for (const p of platforms) {
       if (x < p.x0 || x > p.x1 || z < p.z0 || z > p.z1) continue;
@@ -81,14 +113,26 @@ export function buildWorld(scene) {
   }
 
   function inKillHole(x, z) {
-    for (const h of holes) {
-      if (typeof h.contains === 'function') {
-        if (h.contains(x, z)) return true;
-        continue;
-      }
-      if (x >= h.x0 && x <= h.x1 && z >= h.z0 && z <= h.z1) return true;
+    return !!holeAt(x, z);
+  }
+
+  /** Paved, open, not under anything solid — where hazards may land. */
+  function isOpenGround(x, z, margin = 0.3) {
+    if (Math.abs(x) > MAP.half - 1 || Math.abs(z) > MAP.half - 1) return false;
+    let open = false;
+    for (const r of openRects) {
+      if (x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1) { open = true; break; }
     }
-    return false;
+    if (!open) return false;
+    for (const c of staticColliders) {
+      if (x > c.x0 - margin && x < c.x1 + margin && z > c.z0 - margin && z < c.z1 + margin) return false;
+    }
+    for (const a of avoid) {
+      const dx = x - a.x;
+      const dz = z - a.z;
+      if (dx * dx + dz * dz < (a.r + margin) * (a.r + margin)) return false;
+    }
+    return true;
   }
 
   const world = {
@@ -96,14 +140,26 @@ export function buildWorld(scene) {
     get colliders() { return colliders; },
     set colliders(v) { colliders.length = 0; colliders.push(...v); },
     platforms, cuts, holes, collapseZones, buildings, bounds,
-    punchTiles,
-    heightAt, inKillHole,
+    openRects, looseProps: ctx.looseProps || [],
+    zones: makeZones(openRects, buildings, ctx.carriages),
+    staticColliders,
+    heightAt, surfaceAt, inKillHole, holeAt, isOpenGround,
     add: ctx.add, collide: ctx.collide, cut: ctx.cut,
-    onQuake: null, onFlash: null,
+    onQuake: null, onFlash: null, onSfx: null,
+    /** Pull a house out of its block batch so it can animate on its own. */
+    detachBuilding(b) {
+      if (!b.block) { if (!b.group.parent) root.add(b.group); return; }
+      b.block.dirty = true;
+      root.add(b.group);
+    },
+    /** Rebuild any block batches invalidated this frame. */
+    flushBlocks() {
+      for (const block of ctx.blocks) if (block.dirty) rebuildBlock(block, root);
+    },
   };
 
   world.juice = createJuice(world);
-  world.disaster = createDisaster(world, { seed: WORLD_SEED });
+  world.disaster = createDisaster(world, { seed: opts.seed ?? WORLD_SEED });
   updaters.push((dt, player) => world.disaster.update(dt, player));
   updaters.push((dt) => world.juice.update(dt));
   world.updaters = updaters;
@@ -112,188 +168,240 @@ export function buildWorld(scene) {
 }
 
 /**
- * Spacing (sakura ichome / street numbers):
- * - ROAD_HALF 3.15, WALK_W 1.55 (unchanged from sakura)
- * - FRONT_APRON 0.25 m — building face sits just past sidewalk
- * - PARTY_GAP 0.55–0.85 m between neighbouring houses (sakura GAP_B ~0.75)
- * - BIKE_GAP ~2.4 m occasional shared yard (sakura GAP_A ~3.1, tightened)
- * - Narrow alleys 1.4 m between blocks
+ * Hazard zones: the plaza plus four quadrants. Each runs its own
+ * deterministic hazard clock, so density stays similar to the old
+ * single-cross map wherever a player is standing.
  */
-const PARTY_GAP = 0.7;
-const BIKE_GAP = 2.2;
-
-function placeBuildings(ctx, buildings, rng) {
-  const depth = 6.0;
-  const fc = frontCenter(depth); // ~7.95
-
-  // Continuous north frontage — almost party-wall packing, shops at corners
-  placeRow(ctx, buildings, {
-    axis: 'x',
-    face: 'z-',
-    z: fc,
-    depth,
-    // fill from -MAP.half+3 to -cornerClear and +cornerClear to +MAP.half-3
-    spans: [
-      packSpan(-31.5, -5.2, depth, 0),
-      packSpan(5.2, 31.5, depth, 100),
-    ],
-  });
-
-  placeRow(ctx, buildings, {
-    axis: 'x',
-    face: 'z+',
-    z: -fc,
-    depth,
-    spans: [
-      packSpan(-31.5, -5.2, depth, 200),
-      packSpan(5.2, 31.5, depth, 300),
-    ],
-  });
-
-  placeRow(ctx, buildings, {
-    axis: 'z',
-    face: 'x+',
-    x: -fc,
-    depth,
-    spans: [
-      packSpan(-31.0, -5.2, depth, 400),
-      packSpan(5.2, 31.0, depth, 500),
-    ],
-  });
-
-  placeRow(ctx, buildings, {
-    axis: 'z',
-    face: 'x-',
-    x: fc,
-    depth,
-    spans: [
-      packSpan(-31.0, -5.2, depth, 600),
-      packSpan(5.2, 31.0, depth, 700),
-    ],
-  });
-
-  // Second row (back lot) — tight behind first row, ~0.9 m alley
-  const alley = 1.35;
-  const backDepth = 5.4;
-  const backFc = fc + depth / 2 + alley + backDepth / 2;
-
-  placeRow(ctx, buildings, {
-    axis: 'x', face: 'z-', z: backFc, depth: backDepth,
-    spans: [packSpan(-30, -6, backDepth, 800), packSpan(6, 30, backDepth, 850)],
-    floorsBias: 1,
-  });
-  placeRow(ctx, buildings, {
-    axis: 'x', face: 'z+', z: -backFc, depth: backDepth,
-    spans: [packSpan(-30, -6, backDepth, 900), packSpan(6, 30, backDepth, 950)],
-    floorsBias: 1,
-  });
-
-  // Corner shops — plug the four intersection corners flush to curb
-  const cornerShops = [
-    { x: -8.6, z: fc - 0.15, w: 6.4, d: 6.2, face: 'z-', label: '角の店', wall: 0, collapseType: 'facade' },
-    { x: 8.6, z: fc - 0.15, w: 6.4, d: 6.2, face: 'z-', label: 'たばこ', wall: 2 },
-    { x: -8.6, z: -(fc - 0.15), w: 6.4, d: 6.2, face: 'z+', label: '米屋', wall: 1, collapseType: 'pancake' },
-    { x: 8.6, z: -(fc - 0.15), w: 6.4, d: 6.2, face: 'z+', label: '青空', wall: 3 },
-    { x: -(fc - 0.15), z: -8.4, w: 6.2, d: 5.8, face: 'x+', label: '書店', wall: 4 },
-    { x: fc - 0.15, z: 8.4, w: 6.2, d: 5.8, face: 'x-', label: '花屋', wall: 5, collapseType: 'lean' },
+function makeZones(openRects, buildings, carriages) {
+  const Z = PLAZA.half + 4;
+  const H = MAP.half;
+  const regions = [
+    { name: 'plaza', x0: -Z, x1: Z, z0: -Z, z1: Z, exclude: null },
+    { name: 'sw', x0: -H, x1: 0, z0: -H, z1: 0, exclude: Z },
+    { name: 'se', x0: 0, x1: H, z0: -H, z1: 0, exclude: Z },
+    { name: 'nw', x0: -H, x1: 0, z0: 0, z1: H, exclude: Z },
+    { name: 'ne', x0: 0, x1: H, z0: 0, z1: H, exclude: Z },
   ];
-  for (const s of cornerShops) {
-    const built = makeShop(s);
-    ctx.add(built.group);
-    const fp = built.footprint;
-    ctx.collide(fp.x0, fp.z0, fp.x1, fp.z1, fp.top, undefined, built);
-    buildings.push(built);
-  }
+  return regions.map((reg) => {
+    const rects = [];
+    let area = 0;
+    for (const r of openRects) {
+      const x0 = Math.max(r.x0, reg.x0);
+      const x1 = Math.min(r.x1, reg.x1);
+      const z0 = Math.max(r.z0, reg.z0);
+      const z1 = Math.min(r.z1, reg.z1);
+      if (x1 - x0 < 0.5 || z1 - z0 < 0.5) continue;
+      const a = (x1 - x0) * (z1 - z0);
+      rects.push({ x0, x1, z0, z1, a });
+      area += a;
+    }
+    const inRegion = (x, z) => x >= reg.x0 && x <= reg.x1 && z >= reg.z0 && z <= reg.z1
+      && !(reg.exclude && Math.abs(x) < reg.exclude && Math.abs(z) < reg.exclude);
+    const zoneBuildings = buildings.filter((b) => {
+      const cx = (b.footprint.x0 + b.footprint.x1) / 2;
+      const cz = (b.footprint.z0 + b.footprint.z1) / 2;
+      if (reg.name === 'plaza') return Math.abs(cx) < Z + 8 && Math.abs(cz) < Z + 8;
+      return inRegion(cx, cz) && !(Math.abs(cx) < Z + 8 && Math.abs(cz) < Z + 8);
+    });
+    // Road stretches inside this zone (runaway-car lanes), in road-local terms
+    const roads = [];
+    for (const { road, rect } of carriages) {
+      const x0 = Math.max(rect.x0, reg.x0);
+      const x1 = Math.min(rect.x1, reg.x1);
+      const z0 = Math.max(rect.z0, reg.z0);
+      const z1 = Math.min(rect.z1, reg.z1);
+      if (x1 - x0 < 0.5 || z1 - z0 < 0.5) continue;
+      const lo = road.axis === 'x' ? x0 : z0;
+      const hi = road.axis === 'x' ? x1 : z1;
+      if (hi - lo > 10) roads.push({ road, lo, hi });
+    }
+    return { name: reg.name, rects, area, inRegion, buildings: zoneBuildings, roads };
+  });
+}
 
-  // Garden / party walls in residual gaps (visual fill)
-  fillPartyWalls(ctx, buildings);
+/* ------------------------------------------------------------------ *
+ * Town blocks
+ *
+ * Each block between road corridors is split by a walkable 3 m back lane
+ * (alternating E–W / N–S per block). Both halves carry a frontage row
+ * facing the road and a back row facing the lane, so every block has four
+ * rows of collapsible houses. Gaps between houses are sealed with low
+ * walls; the lane is reachable only from its ends. Houses of a block are
+ * batched into one mesh per material (see makeBlockBatch).
+ * ------------------------------------------------------------------ */
+const PARTY_GAP = 0.45;
+const BIKE_GAP = 1.1;
+const LANE_W = 3.0;
+const SHOP_LABELS = ['角の店', 'たばこ', '米屋', '青空', '書店', '花屋', '八百屋', '銭湯', '喫茶', '薬局'];
 
-  void rng;
+function placeBuildings(ctx, buildings) {
+  const H = MAP.half;
+  const P = PLAZA.half;
+  const corrX = ROADS.filter((r) => r.axis === 'z').map((r) => [r.c - corridorHalf(r), r.c + corridorHalf(r)]);
+  const corrZ = ROADS.filter((r) => r.axis === 'x').map((r) => [r.c - corridorHalf(r), r.c + corridorHalf(r)]);
+  const xs = subtractIntervals(-H, H, corrX);
+  const zs = subtractIntervals(-H, H, corrZ);
+  const wallMat = cel({ color: PAL.concreteMid, bands: 3, tint: 0x6a6288 });
+  const AP = FRONT_APRON;
+  let seedBase = 0;
+  let shopIdx = 0;
+  const blocks = [];
+  ctx.blocks = blocks;
+
+  const plazaClip = (lo, hi, crossLo, crossHi) => {
+    if (crossHi < -P - 0.5 || crossLo > P + 0.5) return [[lo, hi]];
+    return subtractIntervals(lo, hi, [[-P - 0.8, P + 0.8]]);
+  };
+
+  xs.forEach(([bx0, bx1], ix) => {
+    zs.forEach(([bz0, bz1], iz) => {
+      const block = { houses: [], batch: null, dirty: true };
+      blocks.push(block);
+      const laneAlongX = (ix + iz) % 2 === 0;
+      // block-local frame: u runs along the lane, v across it
+      const U = laneAlongX ? [bx0, bx1] : [bz0, bz1];
+      const V = laneAlongX ? [bz0, bz1] : [bx0, bx1];
+      const roadU0 = U[0] > -H + 0.1;
+      const roadU1 = U[1] < H - 0.1;
+      const roadV = [V[0] > -H + 0.1, V[1] < H - 0.1];
+      const toW = (u, v) => (laneAlongX ? { x: u, z: v } : { x: v, z: u });
+      const faceV = (sign) => (laneAlongX ? (sign < 0 ? 'z-' : 'z+') : (sign < 0 ? 'x-' : 'x+'));
+      const vMid = (V[0] + V[1]) / 2;
+      const laneV0 = vMid - LANE_W / 2;
+      const laneV1 = vMid + LANE_W / 2;
+      const half = laneV0 - V[0];
+
+      // lane paving (ends meet the corridor sidewalks or the perimeter wall)
+      const lr = laneAlongX
+        ? { x0: U[0], x1: U[1], z0: laneV0, z1: laneV1 }
+        : { x0: laneV0, x1: laneV1, z0: U[0], z1: U[1] };
+      addLane(ctx, lr, laneAlongX);
+
+      // rows run to the perimeter wall on map-edge ends so nothing hides behind them
+      const uLo = U[0] + (roadU0 ? AP : 0.35);
+      const uHi = U[1] - (roadU1 ? AP : 0.35);
+      const rows = [];
+      for (const side of [0, 1]) {
+        const s = side === 0 ? -1 : 1; // outward direction in v
+        const outer = V[side];
+        const laneEdge = side === 0 ? laneV0 : laneV1;
+        if (roadV[side]) {
+          const F = Math.min(6, half * 0.55);
+          const fFront = outer - s * AP;
+          rows.push({ front: fFront, depth: F, face: faceV(s), sign: s, floors: [2, 2, 1, 3] });
+          const bFront = laneEdge + s * 0.2;
+          const bBack = fFront - s * (F + 0.1);
+          const B = Math.abs(bBack - bFront);
+          if (B >= 3) rows.push({ front: bFront, depth: B, face: faceV(-s), sign: -s, floors: [1, 2, 2] });
+        } else {
+          // map edge: one deep row from the lane to the wall
+          const bFront = laneEdge + s * 0.2;
+          const B = Math.abs(outer - s * 0.3 - bFront);
+          rows.push({ front: bFront, depth: B, face: faceV(-s), sign: -s, floors: [2, 3, 2] });
+        }
+      }
+
+      for (const row of rows) {
+        const vc = row.front - row.sign * (row.depth / 2);
+        for (const [lo, hi] of plazaClip(uLo, uHi, vc - row.depth / 2, vc + row.depth / 2)) {
+          const houses = packSpan(lo, hi, seedBase, row.floors);
+          seedBase += 97;
+          houses.forEach((h, i) => {
+            const p = toW(h.center, vc);
+            const spec = {
+              x: p.x, z: p.z, w: h.w, d: row.depth,
+              face: row.face, seed: h.seed, wall: h.wall,
+              floors: h.floors, collapseType: h.collapseType,
+            };
+            const asShop = (i === 0 || i === houses.length - 1) && houses.length > 2
+              && (h.seed % 3 === 0) && row.depth <= 6.5;
+            const built = asShop
+              ? makeShop({ ...spec, label: SHOP_LABELS[shopIdx++ % SHOP_LABELS.length] })
+              : makeHouse(spec);
+            built.face = row.face;
+            built.block = block;
+            const fp = built.footprint;
+            ctx.collide(fp.x0, fp.z0, fp.x1, fp.z1, fp.top, undefined, built);
+            buildings.push(built);
+            block.houses.push(built);
+          });
+          // Seal gaps between houses with a low garden wall on the frontage
+          for (let i = 0; i < houses.length - 1; i++) {
+            const a = houses[i].center + houses[i].w / 2;
+            const b = houses[i + 1].center - houses[i + 1].w / 2;
+            if (b - a < 0.2) continue;
+            const mid = (a + b) / 2;
+            const len = b - a + 0.1;
+            const fv = row.front - row.sign * 0.35;
+            const c = toW(mid, fv);
+            const wall = laneAlongX
+              ? box(len, 1.35, 0.18, wallMat, c.x, LOT_TOP + 0.67, c.z)
+              : box(0.18, 1.35, len, wallMat, c.x, LOT_TOP + 0.67, c.z);
+            wall.castShadow = true;
+            wall.receiveShadow = true;
+            ctx.add(wall);
+            const p0 = toW(a, fv - 0.15);
+            const p1 = toW(b, fv + 0.15);
+            ctx.collide(p0.x, p0.z, p1.x, p1.z, 1.4);
+          }
+        }
+      }
+    });
+  });
+  void WALK_W;
 }
 
 /** Pack houses along a 1D span with party gaps + occasional bike gaps. */
-function packSpan(from, to, depth, seedBase) {
+function packSpan(from, to, seedBase, floorCycle = [2, 1, 2, 2]) {
   const houses = [];
   let cursor = from;
   let i = 0;
-  while (cursor < to - 3.5) {
-    const w = 4.8 + ((seedBase + i * 17) % 5) * 0.28; // 4.8–5.9
-    if (cursor + w > to) break;
+  while (cursor < to - 2.8) {
+    let w = 3.4 + ((seedBase + i * 17) % 5) * 0.3; // 3.4–4.6 narrow machiya-style frontages
+    if (cursor + w > to) {
+      // stretch the last house to close the row rather than leave a hole
+      w = to - cursor;
+      if (w < 2.8) break;
+    }
     const gap = (i % 5 === 3) ? BIKE_GAP : PARTY_GAP;
     houses.push({
       center: cursor + w / 2,
       w,
-      d: depth,
       seed: seedBase + i * 13,
       wall: (seedBase + i) % 8,
-      floors: (i % 4 === 1) ? 1 : 2,
+      floors: floorCycle[(seedBase / 97 + i) % floorCycle.length | 0],
       collapseType: i % 7 === 2 ? 'lean' : i % 7 === 5 ? 'pancake' : i % 7 === 0 ? 'facade' : undefined,
-      gapAfter: gap,
     });
     cursor += w + gap;
     i++;
   }
+  // close the tail gap if the last house fell short of the span end
+  const last = houses[houses.length - 1];
+  if (last) {
+    const end = last.center + last.w / 2;
+    if (to - end > 0.05 && to - end < 2.8) {
+      last.w += to - end;
+      last.center = to - last.w / 2;
+    }
+  }
   return houses;
 }
 
-function placeRow(ctx, buildings, { axis, face, x, z, depth, spans, floorsBias }) {
-  for (const span of spans) {
-    for (const h of span) {
-      const spec = {
-        w: h.w,
-        d: h.d ?? depth,
-        face,
-        seed: h.seed,
-        wall: h.wall,
-        floors: floorsBias === 1 ? (h.floors === 2 ? 1 : h.floors) : h.floors,
-        collapseType: h.collapseType,
-      };
-      if (axis === 'x') {
-        spec.x = h.center;
-        spec.z = z;
-      } else {
-        spec.z = h.center;
-        spec.x = x;
-        // for side rows authored as w along street: swap so width faces street correctly
-        // makeHouse: w along local X, d along Z, then rotated by face
-        // face x+/- : footprint uses d along X — keep w as street-front width by swapping
-        const streetW = h.w;
-        spec.w = h.d ?? depth;
-        spec.d = streetW;
-      }
-      addHouse(ctx, buildings, spec);
-    }
+/**
+ * Per-block batching: all standing, non-telegraphing houses of a block are
+ * merged into one mesh per material. A house that starts to give way is
+ * pulled out as its own group (so it can shake/lean) and the batch rebuilt.
+ */
+function rebuildBlock(block, root) {
+  if (block.batch) {
+    root.remove(block.batch);
+    block.batch.traverse((o) => { if (o.isMesh) o.geometry.dispose(); });
   }
-}
-
-function addHouse(ctx, buildings, h) {
-  const built = makeHouse(h);
-  ctx.add(built.group);
-  const fp = built.footprint;
-  ctx.collide(fp.x0, fp.z0, fp.x1, fp.z1, fp.top, undefined, built);
-  buildings.push(built);
-}
-
-function fillPartyWalls(ctx, buildings) {
-  const mat = cel({ color: PAL.concreteMid, bands: 3, tint: 0x6a6288 });
-  // Sort north-row buildings and plug micro-gaps with low walls
-  const north = buildings.filter((b) => {
-    const cz = (b.footprint.z0 + b.footprint.z1) / 2;
-    return cz > 5 && cz < 12;
-  }).sort((a, b) => a.footprint.x0 - b.footprint.x0);
-
-  for (let i = 0; i < north.length - 1; i++) {
-    const a = north[i].footprint;
-    const b = north[i + 1].footprint;
-    const gap = b.x0 - a.x1;
-    if (gap > 0.15 && gap < 2.6) {
-      const cx = (a.x1 + b.x0) / 2;
-      const cz = (Math.min(a.z1, b.z1) + Math.max(a.z0, b.z0)) / 2;
-      const wall = box(Math.max(0.2, gap - 0.1), 1.35, 0.18, mat, cx, 0.67, a.z0 + 0.4);
-      wall.castShadow = true;
-      ctx.add(wall);
-      ctx.collide(cx - gap / 2, a.z0, cx + gap / 2, a.z0 + 0.5, 1.35);
-      void cz;
-    }
-  }
+  const g = new THREE.Group();
+  g.name = 'block';
+  const standing = block.houses.filter((b) => !b.collapsed && !b.pending);
+  if (standing.length) mergeStatic(standing.map((b) => b.group), g, { keep: true });
+  root.add(g);
+  block.batch = g;
+  block.dirty = false;
 }

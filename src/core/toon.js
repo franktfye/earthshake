@@ -114,7 +114,6 @@ export function cel(opts = {}) {
   const mat = new THREE.MeshToonMaterial({
     color,
     gradientMap: gradientMap(bands),
-    flatShading: flat,
     map,
     alphaMap,
     transparent,
@@ -127,6 +126,7 @@ export function cel(opts = {}) {
     emissiveIntensity,
   });
   if (depthWrite !== null) mat.depthWrite = depthWrite;
+  void flat; // MeshToonMaterial has no flatShading; faceted look comes from the low-poly geometry
   applyShadowTint(mat, tint);
   if (key) matCache.set(key, mat);
   return mat;

@@ -96,7 +96,8 @@ export function createRemoteManager(scene, camera) {
       return;
     }
 
-    const char = createCharacter();
+    const gender = player.gender === 'f' ? 'f' : 'm';
+    const char = createCharacter({ gender });
     scene.add(char.root);
     const label = makeLabel(player.name || 'Runner');
     char.root.add(label);
@@ -107,6 +108,7 @@ export function createRemoteManager(scene, camera) {
       ownedAnchor: true,
       label,
       name: player.name,
+      gender,
       target: { ...player },
       isSelf: false,
     });
@@ -118,7 +120,7 @@ export function createRemoteManager(scene, camera) {
     const r = remotes.get(id);
     if (!r || r.isSelf || !pinocCreate || r.char?.pinoc) return;
     try {
-      const avatar = await pinocCreate({ lod: 'performance' });
+      const avatar = await pinocCreate({ lod: 'performance', gender: r.gender });
       if (!remotes.has(id)) {
         avatar.destroy?.();
         return;
@@ -137,7 +139,7 @@ export function createRemoteManager(scene, camera) {
       cur.char = avatar;
       cur.anchor = avatar.root;
     } catch (err) {
-      console.warn('[Aftershock] remote Pinoc upgrade failed', err);
+      if (!/not available/.test(String(err?.message))) console.warn('[Aftershock] remote Pinoc upgrade failed', err);
     }
   }
 
@@ -232,7 +234,8 @@ export function createRemoteManager(scene, camera) {
         t.facing ?? 0,
         t.moving ?? 0,
         !!t.run,
-        dt
+        dt,
+        !!t.air
       );
       if (t.alive === false) {
         root.visible = false;

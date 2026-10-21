@@ -18,13 +18,16 @@ import http from 'node:http';
 import { WebSocketServer } from 'ws';
 import { randomBytes } from 'node:crypto';
 
-const PORT = Number(process.env.PORT || 8787);
+const PORT = Number(process.env.PORT || 19090);
+const HOST = process.env.HOST || '0.0.0.0';
 const MAX_PLAYERS = 30;
 const TICK_MS = 50;
 const WORLD_SEED = 20241019;
 const LOBBY_MS = 60_000;
 const ALL_READY_MS = 5_000;
 const ROUND_END_HOLD_MS = 6_000;
+/** A round with a single participant ends at death or after 10 minutes. */
+const SOLO_ROUND_MS = 10 * 60_000;
 
 const players = new Map();
 let phase = 'lobby'; // lobby | playing | roundEnd
@@ -33,6 +36,8 @@ let startedAt = 0; // round play clock
 let lobbyEndsAt = Date.now() + LOBBY_MS;
 let lobbyMode = 'wait'; // wait | starting
 let roundEndTimer = null;
+let roundMode = 'versus'; // versus (2+ at start: last one standing) | solo (1: death or 10 min)
+let roundEndsAt = null;
 
 function sanitizeName(raw) {
   let s = String(raw ?? '').trim().slice(0, 16);
@@ -53,11 +58,14 @@ function publicPlayer(p) {
     ready: !!p.ready,
     x: p.x, y: p.y, z: p.z,
     facing: p.facing, yaw: p.yaw,
-    moving: p.moving, run: p.run,
+    moving: p.moving, run: p.run, air: !!p.air,
     alive: p.alive,
     lives: p.lives ?? 3,
     score: p.score ?? 0,
     survived: p.survived ?? 0,
+    slot: p.slot ?? 0,
+    gender: p.gender === 'f' ? 'f' : 'm',
+    inRound: !!p.inRound,
   };
 }
 
@@ -123,39 +131,53 @@ function beginRound() {
   lobbyMode = 'wait';
   startedAt = Date.now();
   roomSeed = WORLD_SEED + (startedAt % 100000);
+  // Spawn slots: clients map slot → one of 30 spread-out spawn points
+  let slot = 0;
   for (const p of players.values()) {
     p.ready = false;
     p.alive = true;
     p.lives = 3;
     p.score = 0;
     p.survived = 0;
-    p.x = -18 + (Math.random() * 4 - 2);
-    p.z = Math.random() * 2 - 1;
-    p.y = 0.1;
+    p.slot = slot++;
+    p.inRound = true;
   }
+  roundMode = players.size >= 2 ? 'versus' : 'solo';
+  roundEndsAt = roundMode === 'solo' ? startedAt + SOLO_ROUND_MS : null;
   broadcast({
     type: 'roundStart',
     seed: roomSeed,
     startedAt,
+    serverNow: Date.now(),
+    mode: roundMode,
+    endsAt: roundEndsAt,
     max: MAX_PLAYERS,
     players: [...players.values()].map(publicPlayer),
   });
   console.log(`[round] start seed=${roomSeed} players=${players.size}`);
 }
 
-function endRound() {
+function endRound(reason = 'wiped') {
   if (phase !== 'playing') return;
   phase = 'roundEnd';
+  // Observers (joined mid-round) aren't ranked. Survivors first, then
+  // longest survival, then score.
   const scores = [...players.values()]
+    .filter((p) => p.inRound)
     .map((p) => ({
       id: p.id,
       name: p.name,
+      gender: p.gender === 'f' ? 'f' : 'm',
+      alive: !!(p.alive && (p.lives ?? 0) > 0),
       score: Math.floor(p.score || 0),
       survived: Math.floor(p.survived || 0),
     }))
-    .sort((a, b) => b.score - a.score);
-  broadcast({ type: 'roundEnd', scores });
-  console.log(`[round] end — ${scores.length} scores`);
+    .sort((a, b) => (b.alive - a.alive) || (b.survived - a.survived) || (b.score - a.score));
+  const winner = reason === 'last-standing' || reason === 'time' ? scores.find((sc) => sc.alive) : null;
+  broadcast({ type: 'roundEnd', scores, reason, mode: roundMode, winnerId: winner?.id ?? null });
+  console.log(`[round] end (${reason}) — ${scores.length} ranked, winner=${winner?.name ?? '-'}`);
+  for (const p of players.values()) p.inRound = false;
+  roundEndsAt = null;
   if (roundEndTimer) clearTimeout(roundEndTimer);
   roundEndTimer = setTimeout(() => {
     phase = 'lobby';
@@ -173,9 +195,22 @@ function endRound() {
 function livingCount() {
   let n = 0;
   for (const p of players.values()) {
-    if (p.alive && (p.lives ?? 0) > 0) n += 1;
+    if (p.inRound && p.alive && (p.lives ?? 0) > 0) n += 1;
   }
   return n;
+}
+
+/** Round over? versus: ≤1 standing · solo: dead or 10-minute cap. */
+function checkRoundEnd(now = Date.now()) {
+  if (phase !== 'playing') return;
+  const living = livingCount();
+  if (roundMode === 'solo') {
+    if (living === 0) endRound('wiped');
+    else if (roundEndsAt && now >= roundEndsAt) endRound('time');
+    return;
+  }
+  if (living === 1) endRound('last-standing');
+  else if (living === 0) endRound('wiped');
 }
 
 const server = http.createServer((req, res) => {
@@ -237,6 +272,8 @@ wss.on('connection', (ws) => {
         lives: 3,
         score: 0,
         survived: 0,
+        gender: msg.gender === 'f' ? 'f' : 'm',
+        inRound: false,
       };
       players.set(id, me);
 
@@ -252,6 +289,7 @@ wss.on('connection', (ws) => {
         max: MAX_PLAYERS,
         seed: roomSeed,
         startedAt,
+        serverNow: Date.now(),
         lobby: lobbySnapshot(),
         players: [...players.values()].filter((p) => p.id !== id).map(publicPlayer),
       });
@@ -263,11 +301,15 @@ wss.on('connection', (ws) => {
         me.alive = false;
         me.lives = 0;
         me.ready = false;
+        me.inRound = false; // observer until this round is over
         broadcast({ type: 'join', player: publicPlayer(me) }, id);
         send(ws, {
           type: 'roundStart',
           seed: roomSeed,
           startedAt,
+          serverNow: Date.now(),
+          mode: roundMode,
+          endsAt: roundEndsAt,
           max: MAX_PLAYERS,
           spectate: true,
           players: [...players.values()].map(publicPlayer),
@@ -292,18 +334,21 @@ wss.on('connection', (ws) => {
 
     if (msg.type === 'state') {
       if (phase !== 'playing') return;
-      me.x = Number(msg.x) || me.x;
-      me.y = Number(msg.y) || me.y;
-      me.z = Number(msg.z) || me.z;
+      const num = (v, fallback) => (Number.isFinite(Number(v)) ? Number(v) : fallback);
+      me.x = num(msg.x, me.x);
+      me.y = num(msg.y, me.y);
+      me.z = num(msg.z, me.z);
       me.facing = Number(msg.facing) || 0;
       me.yaw = Number(msg.yaw) || 0;
       me.moving = Number(msg.moving) || 0;
       me.run = !!msg.run;
-      me.alive = msg.alive !== false;
+      me.alive = me.inRound ? msg.alive !== false : false;
+      me.air = !!msg.air;
       if (msg.lives != null) me.lives = Math.max(0, Math.min(3, Number(msg.lives) || 0));
-      if (msg.score != null) me.score = Number(msg.score) || me.score;
-      if (msg.survived != null) me.survived = Number(msg.survived) || me.survived;
+      if (msg.score != null) me.score = num(msg.score, me.score);
+      if (msg.survived != null) me.survived = num(msg.survived, me.survived);
       if (me.lives <= 0) me.alive = false;
+      if (!me.inRound) me.lives = 0;
       return;
     }
   });
@@ -317,8 +362,8 @@ wss.on('connection', (ws) => {
     if (phase === 'lobby') {
       broadcastLobby();
       maybeStartFromReady();
-    } else if (phase === 'playing' && players.size > 0 && livingCount() === 0) {
-      endRound();
+    } else if (phase === 'playing' && players.size > 0) {
+      checkRoundEnd();
     } else if (players.size === 0) {
       phase = 'lobby';
       resetLobbyTimer(LOBBY_MS);
@@ -337,10 +382,13 @@ setInterval(() => {
   }
 
   if (phase === 'playing') {
-    if (players.size > 0 && livingCount() === 0) {
-      endRound();
+    if (players.size === 0) {
+      phase = 'lobby';
+      resetLobbyTimer(LOBBY_MS);
       return;
     }
+    checkRoundEnd(now);
+    if (phase !== 'playing') return;
     const list = [...players.values()].map(publicPlayer);
     broadcast({ type: 'states', players: list, phase, startedAt, serverNow: now });
   }
@@ -351,6 +399,6 @@ setInterval(() => {
   if (phase === 'lobby' && players.size > 0) broadcastLobby();
 }, 1000);
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`[aftershock] WS :${PORT} max=${MAX_PLAYERS} lobby=${LOBBY_MS / 1000}s`);
+server.listen(PORT, HOST, () => {
+  console.log(`[aftershock] WS ${HOST}:${PORT} max=${MAX_PLAYERS} lobby=${LOBBY_MS / 1000}s`);
 });

@@ -123,11 +123,9 @@ const GRADE_SHADER = {
       vec3 c = texture2D( tDiffuse, vUv ).rgb;
       float l = dot( c, vec3( 0.2126, 0.7152, 0.0722 ) );
 
-      // Pitch-black abyss (fissure voids): crush before violet shadow-tint + lift
-      if ( l < 0.11 ) {
-        gl_FragColor = vec4( 0.0, 0.0, 0.0, 1.0 );
-        return;
-      }
+      // Near-black (deep fissure floors) stays black: fade the shadow lift
+      // out below ~4% luminance instead of hard-crushing every dark pixel.
+      float abyss = smoothstep( 0.008, 0.045, l );
 
       // split-tone: cool violet in the darks, warm paper white in the lights
       float k = smoothstep( 0.02, 0.55, l );
@@ -137,7 +135,7 @@ const GRADE_SHADER = {
       c += vec3( uWarmth, uWarmth * 0.45, 0.0 ) * l * 0.35;
 
       // keep shadows readable -- never crushed to black
-      c = c + uLift * ( 1.0 - k );
+      c = c + uLift * ( 1.0 - k ) * abyss;
 
       c = mix( vec3( l ), c, uSaturation );
 

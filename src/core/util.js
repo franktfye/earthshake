@@ -111,3 +111,46 @@ export function sagCurve(a, b, sag, segments = 14) {
   }
   return new THREE.CatmullRomCurve3(pts);
 }
+
+/**
+ * Collapse many static meshes into one mesh per material (draw-call diet).
+ * Inverted-hull outline shells (unique ShaderMaterial each) are bucketed by
+ * thickness + colour and share the first shell material. `objects` are
+ * removed from their parents; merged meshes are added to `target`.
+ */
+export function mergeStatic(objects, target, { keep = false } = {}) {
+  const buckets = new Map();
+  target.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(target.matrixWorld).invert();
+  for (const obj of objects) {
+    obj.updateMatrixWorld(true);
+    obj.traverse((o) => {
+      if (!o.isMesh || o.isInstancedMesh || Array.isArray(o.material) || !o.visible) return;
+      const mat = o.material;
+      let key = mat.uuid;
+      if (mat.isShaderMaterial && mat.uniforms?.uThickness) {
+        key = `hull|${mat.uniforms.uThickness.value}|${mat.uniforms.uColor.value.getHex()}`;
+      }
+      key += `|${o.castShadow}|${o.receiveShadow}|${o.renderOrder}`;
+      let b = buckets.get(key);
+      if (!b) {
+        b = { mat, parts: [], cast: o.castShadow, receive: o.receiveShadow, ro: o.renderOrder };
+        buckets.set(key, b);
+      }
+      b.parts.push({ geometry: o.geometry, matrix: new THREE.Matrix4().multiplyMatrices(inv, o.matrixWorld) });
+    });
+  }
+  if (!keep) for (const obj of objects) obj.parent?.remove(obj);
+  const out = [];
+  for (const b of buckets.values()) {
+    const m = new THREE.Mesh(bake(b.parts), b.mat);
+    m.castShadow = b.cast;
+    m.receiveShadow = b.receive;
+    m.renderOrder = b.ro;
+    m.matrixAutoUpdate = false;
+    m.updateMatrix();
+    target.add(m);
+    out.push(m);
+  }
+  return out;
+}

@@ -19,7 +19,23 @@ const ASSETS = {
   walk: `${BASE}character/motions/Walking.splat-skeleton.glb`,
   run: `${BASE}character/motions/Running.splat-skeleton.glb`,
   hit: `${BASE}character/motions/Hit_Reaction_Front.splat-skeleton.glb`,
+  // PINOC library clips "Jump" / "Run Jump" (~2.1 s / 1.9 s incl. wind-up + landing)
+  jump: `${BASE}character/motions/Jumping.splat-skeleton.glb`,
+  runJump: `${BASE}character/motions/Run_Jump.splat-skeleton.glb`,
+  // Aoi (female) — built with the same Pinoc pipeline from aftershock-heroine-sheet.jpg
+  fHigh: `${BASE}character/aftershock-heroine.high.vsplat`,
+  fPerformance: `${BASE}character/aftershock-heroine.performance.vsplat`,
 };
+
+/** HEAD probe so optional assets (heroine, jump clip) degrade gracefully. */
+async function exists(url) {
+  try {
+    const r = await fetch(url, { method: 'HEAD' });
+    return r.ok && !/text\/html/.test(r.headers.get('content-type') || '');
+  } catch {
+    return false;
+  }
+}
 
 /** Mixamo/Pinoc forward is +Z; Aftershock facing 0 looks −Z. */
 const YAW_OFFSET_DEG = 180;
@@ -65,11 +81,16 @@ export async function initPinocLayer(canvas) {
   Character.prefetch(ASSETS.performance);
   Character.prefetch(ASSETS.high);
 
+  const [hasJump, hasRunJump, hasFemale] = await Promise.all([
+    exists(ASSETS.jump), exists(ASSETS.runJump), exists(ASSETS.fPerformance),
+  ]);
   await Promise.all([
     Animation.loadGlb(scene, ASSETS.idle, 'idle'),
     Animation.loadGlb(scene, ASSETS.walk, 'walk'),
     Animation.loadGlb(scene, ASSETS.run, 'run'),
     Animation.loadGlb(scene, ASSETS.hit, 'hit'),
+    hasJump ? Animation.loadGlb(scene, ASSETS.jump, 'jump') : null,
+    hasRunJump ? Animation.loadGlb(scene, ASSETS.runJump, 'runjump') : null,
   ]);
 
   scene.start();
@@ -96,10 +117,13 @@ export async function initPinocLayer(canvas) {
     }
   }
 
-  async function createAvatar({ lod } = {}) {
+  async function createAvatar({ lod, gender = 'm' } = {}) {
+    if (gender === 'f' && !hasFemale) throw new Error('heroine splat not available');
     const quality = lod || (isMobile() ? 'performance' : 'high');
-    const url = quality === 'high' ? ASSETS.high : ASSETS.performance;
-    const pc = await Character.load(scene, url, { name: `hero_${quality}` });
+    const url = gender === 'f'
+      ? (quality === 'high' ? ASSETS.fHigh : ASSETS.fPerformance)
+      : (quality === 'high' ? ASSETS.high : ASSETS.performance);
+    const pc = await Character.load(scene, url, { name: `${gender === 'f' ? 'heroine' : 'hero'}_${quality}` });
     pc.setScale(AVATAR_SCALE, AVATAR_SCALE, AVATAR_SCALE);
     pc.playAnimation('idle', { loop: true, rootMotion: false });
 
@@ -127,7 +151,9 @@ export async function initPinocLayer(canvas) {
       pinoc: true,
       _pc: pc,
 
-      update(pos, facingYaw, moving, run, dt) {
+      gender,
+
+      update(pos, facingYaw, moving, run, dt, air = false) {
         root.position.set(pos.x, pos.y, pos.z);
         root.rotation.y = facingYaw;
         this.facing = facingYaw;
@@ -148,7 +174,19 @@ export async function initPinocLayer(canvas) {
         }
 
         let next = 'idle';
-        if (moving > 0.35) next = run ? 'run' : 'walk';
+        if (air && (hasJump || hasRunJump)) {
+          next = (moving > 1.5 && hasRunJump) || !hasJump ? 'runjump' : 'jump';
+        } else if (moving > 0.35) next = run ? 'run' : 'walk';
+        if (next === 'jump' || next === 'runjump') {
+          // keep whichever take-off we started with for the whole hop
+          if (clip !== 'jump' && clip !== 'runjump') {
+            pc.crossfadeTo(next, { duration: 0.06, loop: false, rootMotion: false });
+            clip = next;
+          }
+          // squeeze the ~2 s clip (wind-up → air → landing) into ~0.9 s of hop
+          pc.playbackSpeed = clip === 'runjump' ? 2.1 : 2.3;
+          return;
+        }
         if (next !== clip) {
           pc.crossfadeTo(next, { duration: 0.14, loop: true, rootMotion: false });
           clip = next;
@@ -198,6 +236,8 @@ export async function initPinocLayer(canvas) {
 
   _layer = {
     ready: true,
+    hasJump: hasJump || hasRunJump,
+    hasFemale,
     scene,
     createAvatar,
     syncCamera,
@@ -214,7 +254,7 @@ export async function initPinocLayer(canvas) {
     },
   };
 
-  window.__aftershockPinoc = { ready: true, assets: ASSETS };
+  window.__aftershockPinoc = { ready: true, assets: ASSETS, hasJump, hasRunJump, hasFemale };
   return _layer;
 }
 

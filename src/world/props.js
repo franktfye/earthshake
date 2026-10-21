@@ -3,7 +3,7 @@ import { PAL } from '../core/palette.js';
 import { cel, flat } from '../core/toon.js';
 import { box, cyl, bake, trs, rngKit, sagCurve, shadowify } from '../core/util.js';
 import { hullOutline } from '../core/outline.js';
-import { ROAD_HALF, WALK_W, MAP } from './street.js';
+import { MAP, WALK_H, ROAD_TOP } from './street.js';
 
 const M = {};
 function mats() {
@@ -107,6 +107,59 @@ export function makeKeiTruck(o = {}) {
       if (shell) shell.userData.isOutline = true;
     }
   }
+  return shadowify(g);
+}
+
+/** Compact sedan — parked cars and runaway-car hazard body. Front is +X. */
+export function makeSedan(o = {}) {
+  const m = mats();
+  const g = new THREE.Group();
+  const body = cel({ color: o.color ?? PAL.blue, bands: 3, tint: 0x5c5680 });
+  const glass = flat({ color: PAL.glassDark });
+  const L = 3.6, W = 1.6;
+  g.add(box(L, 0.55, W, body, 0, 0.6, 0));
+  g.add(box(L * 0.55, 0.5, W - 0.12, body, -0.15, 1.12, 0));
+  g.add(box(0.06, 0.38, W - 0.3, glass, L * 0.125 + 0.02, 1.12, 0));
+  g.add(box(L * 0.5, 0.34, 0.04, glass, -0.15, 1.12, W / 2 - 0.05));
+  g.add(box(L * 0.5, 0.34, 0.04, glass, -0.15, 1.12, -W / 2 + 0.05));
+  g.add(box(0.05, 0.12, 0.3, flat({ color: 0xfff4d0 }), L / 2 + 0.01, 0.68, 0.5));
+  g.add(box(0.05, 0.12, 0.3, flat({ color: 0xfff4d0 }), L / 2 + 0.01, 0.68, -0.5));
+  const wheelGeo = new THREE.CylinderGeometry(0.3, 0.3, 0.2, 10);
+  wheelGeo.rotateX(Math.PI / 2);
+  for (const wx of [L / 2 - 0.7, -L / 2 + 0.7]) {
+    for (const s2 of [-1, 1]) {
+      const w = new THREE.Mesh(wheelGeo, m.dark);
+      w.position.set(wx, 0.3, s2 * (W / 2 - 0.05));
+      g.add(w);
+    }
+  }
+  g.position.set(o.x ?? 0, o.y ?? 0, o.z ?? 0);
+  g.rotation.y = o.ry ?? 0;
+  return shadowify(g);
+}
+
+/** Boxy delivery van. Front is +X. */
+export function makeVan(o = {}) {
+  const m = mats();
+  const g = new THREE.Group();
+  const body = cel({ color: o.color ?? PAL.wallWhite, bands: 3, tint: 0x6f6790 });
+  const stripe = cel({ color: o.stripe ?? PAL.teal, bands: 3, tint: 0x4a6a80 });
+  const glass = flat({ color: PAL.glassDark });
+  const L = 3.9, W = 1.7;
+  g.add(box(L, 1.55, W, body, 0, 1.05, 0));
+  g.add(box(L + 0.02, 0.2, W + 0.02, stripe, 0, 0.75, 0));
+  g.add(box(0.06, 0.55, W - 0.3, glass, L / 2 + 0.01, 1.45, 0));
+  const wheelGeo = new THREE.CylinderGeometry(0.32, 0.32, 0.2, 10);
+  wheelGeo.rotateX(Math.PI / 2);
+  for (const wx of [L / 2 - 0.7, -L / 2 + 0.7]) {
+    for (const s2 of [-1, 1]) {
+      const w = new THREE.Mesh(wheelGeo, m.dark);
+      w.position.set(wx, 0.32, s2 * (W / 2 - 0.05));
+      g.add(w);
+    }
+  }
+  g.position.set(o.x ?? 0, o.y ?? 0, o.z ?? 0);
+  g.rotation.y = o.ry ?? 0;
   return shadowify(g);
 }
 
@@ -226,109 +279,141 @@ export function makeAircon(o = {}) {
   return g;
 }
 
-/** Dense street furniture — sakura-like clutter every few metres. */
+/**
+ * Street furniture along every sidewalk segment of the grid.
+ * Small props register as `looseProps` (they tumble into fissures);
+ * poles/vending/trucks are solid and fissures avoid them.
+ */
 export function buildStreetProps(ctx) {
-  const kerbN = ROAD_HALF + WALK_W * 0.35; // ~3.7 — on sidewalk inner edge
-  const kerbS = -kerbN;
+  const looseProps = [];
+  const avoid = [];
+  ctx.looseProps = looseProps;
+  ctx.avoid = avoid;
+  /** Street clutter: solid (bins, planters… block you) but can tumble into fissures. */
+  const loose = (obj, x, z, hx = 0.3, hz = 0.3, top = 0.9) => {
+    ctx.add(obj);
+    const lp = { obj, x, z, loose: true };
+    ctx.collide(x - hx, z - hz, x + hx, z + hz, (obj.position.y || 0) + top, undefined, lp);
+    looseProps.push(lp);
+  };
   const H = MAP.half;
+  const wireRuns = new Map();
 
-  // Poles every ~6 m along both main-street kerbs (sakura pole run density)
-  const poles = [];
-  for (let x = -H + 3; x <= H - 3; x += 6) {
-    if (Math.abs(x) < 4.5) continue; // clear crossing sightlines a bit
-    poles.push({ x, z: kerbN + 0.55 });
-    poles.push({ x: x + 3, z: kerbS - 0.55 });
-  }
-  for (let z = -H + 4; z <= H - 4; z += 7) {
-    if (Math.abs(z) < 5) continue;
-    poles.push({ x: kerbN + 0.55, z });
-    poles.push({ x: kerbS - 0.55, z: z + 2 });
-  }
+  ctx.sidewalks.forEach((sw, si) => {
+    const { road, side, a, b, inner, outer } = sw;
+    const len = b - a;
+    if (len < 4) return;
+    const alongX = road.axis === 'x';
+    // world position from (along, across)
+    const at = (t, c, y = WALK_H) => (alongX ? { x: t, y, z: c } : { x: c, y, z: t });
+    // yaw that faces the carriageway from this side
+    const faceRoad = alongX ? (side > 0 ? Math.PI : 0) : (side > 0 ? -Math.PI / 2 : Math.PI / 2);
+    const curbC = inner + side * 0.35;
+    const wallC = outer - side * 0.3;
 
-  const poleTops = [];
-  for (const p of poles) {
-    const pole = makePole(p);
-    ctx.add(pole);
-    poleTops.push(new THREE.Vector3(p.x, pole.userData.topY, p.z));
-  }
+    // Utility poles on one side of each road, wired up per run
+    const poleSide = alongX ? 1 : -1;
+    if (side === poleSide) {
+      const key = `${road.axis}${road.c}`;
+      if (!wireRuns.has(key)) wireRuns.set(key, []);
+      for (let t = a + 2; t <= b - 2; t += 7) {
+        const p = at(t, curbC);
+        const pole = makePole(p);
+        ctx.add(pole);
+        ctx.collide(p.x - 0.2, p.z - 0.2, p.x + 0.2, p.z + 0.2, 8);
+        avoid.push({ x: p.x, z: p.z, r: 0.45 });
+        wireRuns.get(key).push(new THREE.Vector3(p.x, pole.userData.topY, p.z));
+      }
+    }
 
-  const north = poleTops.filter((p) => p.z > 3).sort((a, b) => a.x - b.x);
-  const south = poleTops.filter((p) => p.z < -3).sort((a, b) => a.x - b.x);
-  makeWires(ctx, [
-    { points: north, sag: 0.5 },
-    { points: south, sag: 0.48 },
-  ]);
+    // Clutter cycle every ~4.6 m, near building fronts / curb
+    let k = si * 3;
+    for (let t = a + 2.4; t <= b - 2.2; t += 4.6, k++) {
+      const kind = k % 6;
+      if (kind === 0) {
+        const p = at(t, wallC);
+        loose(makeBins(p), p.x, p.z, 0.52, 0.24, 0.95);
+      } else if (kind === 1) {
+        const p = at(t, wallC);
+        loose(makePlanter(p), p.x, p.z, 0.36, 0.36, 0.75);
+      } else if (kind === 2) {
+        for (const d of [-0.35, 0.35]) {
+          const p = at(t + d, wallC - side * 0.1);
+          loose(makeBicycle({ ...p, ry: (alongX ? 0 : Math.PI / 2) + 0.45 }), p.x, p.z, 0.4, 0.4, 0.9);
+        }
+      } else if (kind === 3) {
+        const p = at(t, inner - side * 0.35, ROAD_TOP);
+        loose(makeCone(p), p.x, p.z, 0.17, 0.17, 0.6);
+      } else if (kind === 4 && k % 4 === 0) {
+        const p = at(t, wallC);
+        loose(makeCrates({ ...p, seed: 40 + k }), p.x, p.z, 0.45, 0.35, 0.7);
+      }
+    }
 
-  // Parked vehicles every block on both sides
-  const trucks = [
-    { x: -26, z: kerbN + 0.9, ry: 0.04, hero: true },
-    { x: -14, z: kerbS - 0.9, ry: Math.PI - 0.03, color: PAL.teal, hero: false },
-    { x: -7.5, z: kerbN + 0.9, ry: 0.06, hero: false, load: 'empty' },
-    { x: 12, z: kerbS - 0.9, ry: Math.PI, hero: false },
-    { x: 19, z: kerbN + 0.9, ry: 0.02, color: PAL.orange, hero: false },
-    { x: 27, z: kerbS - 0.9, ry: Math.PI + 0.05, hero: false, load: 'empty' },
-    { x: kerbN + 0.9, z: -18, ry: Math.PI / 2, hero: false },
-    { x: kerbS - 0.9, z: 16, ry: -Math.PI / 2, color: PAL.blue, hero: false },
-  ];
-  for (const t of trucks) {
-    ctx.add(makeKeiTruck(t));
-    ctx.collide(t.x - 1.7, t.z - 0.85, t.x + 1.7, t.z + 0.85, 1.9);
-  }
+    // A vending machine against the frontage on some segments
+    if (len > 9 && si % 3 === 0) {
+      const t = a + len * 0.62;
+      const p = at(t, outer - side * 0.11);
+      ctx.add(makeVending({ ...p, ry: faceRoad }));
+      const hw = alongX ? 0.5 : 0.4;
+      const hd = alongX ? 0.4 : 0.5;
+      ctx.collide(p.x - hw, p.z - hd, p.x + hw, p.z + hd, 1.9);
+    }
 
-  // Bike clusters every ~8 m
-  for (let x = -28; x <= 28; x += 8) {
-    if (Math.abs(x) < 5) continue;
-    ctx.add(makeBicycle({ x: x - 0.35, z: kerbN + 0.35, ry: 0.35 }));
-    ctx.add(makeBicycle({ x: x + 0.35, z: kerbN + 0.45, ry: 0.55 }));
-    ctx.add(makeBicycle({ x: x, z: kerbS - 0.4, ry: -0.4 }));
-  }
+    // Post box + sign on longer runs
+    if (len > 14 && si % 4 === 1) {
+      const p = at(a + len * 0.3, wallC);
+      ctx.add(makePostBox({ ...p }));
+      ctx.collide(p.x - 0.3, p.z - 0.25, p.x + 0.3, p.z + 0.25, 1.3);
+      const q = at(a + len * 0.3 + 2.2, curbC);
+      loose(makeSignPost({ ...q, ry: faceRoad }), q.x, q.z, 0.08, 0.08, 2.6);
+    }
 
-  // Bins / planters / cones / crates along frontages
-  for (let x = -30; x <= 30; x += 5) {
-    if (Math.abs(x) < 4) continue;
-    ctx.add(makeBins({ x, z: kerbN + 0.25 }));
-    ctx.add(makePlanter({ x: x + 2.2, z: kerbS - 0.25 }));
-    if (x % 10 === 0) ctx.add(makeCone({ x: x + 1, z: ROAD_HALF - 0.35 }));
-    if (x % 15 === 0) ctx.add(makeCrates({ x: x - 1.5, z: kerbN + 1.8, seed: 40 + x }));
-  }
+    // Parked vehicles hugging the kerb — kei trucks, sedans, vans
+    const spots = len > 26 ? [0.3, 0.72] : len > 12 ? [0.45] : [];
+    spots.forEach((f, j) => {
+      const t = a + len * f;
+      const p = at(t, inner - side * 0.95, ROAD_TOP);
+      const ry = alongX ? (side > 0 ? 0.03 : Math.PI - 0.03) : (side > 0 ? Math.PI / 2 : -Math.PI / 2);
+      const kind = (si + j) % 3;
+      const colors = [PAL.taxiYellow, PAL.teal, PAL.orange, PAL.blue, PAL.red, PAL.wallWhite];
+      const veh = kind === 0
+        ? makeKeiTruck({ ...p, ry, hero: si % 8 === 0, color: colors[si % 4], load: si % 3 ? undefined : 'empty' })
+        : kind === 1
+          ? makeSedan({ ...p, ry, color: colors[(si + 2) % colors.length] })
+          : makeVan({ ...p, ry, stripe: colors[(si + 1) % 4] });
+      ctx.add(veh);
+      const halfL = kind === 2 ? 1.95 : 1.8;
+      const halfW = 0.85;
+      const hx = alongX ? halfL : halfW;
+      const hz = alongX ? halfW : halfL;
+      ctx.collide(p.x - hx, p.z - hz, p.x + hx, p.z + hz, 1.9);
+    });
+  });
 
-  for (let z = -28; z <= 28; z += 6) {
-    if (Math.abs(z) < 5) continue;
-    ctx.add(makeBins({ x: kerbN + 0.25, z }));
-    ctx.add(makePlanter({ x: kerbS - 0.25, z: z + 2 }));
-    ctx.add(makeCone({ x: ROAD_HALF - 0.3, z: z + 1 }));
+  const runs = [];
+  for (const pts of wireRuns.values()) {
+    pts.sort((p, q) => (p.x - q.x) || (p.z - q.z));
+    // break the run where it jumps across the plaza / a long gap
+    let cur = [];
+    for (const p of pts) {
+      const prev = cur[cur.length - 1];
+      if (prev && prev.distanceTo(p) > 16) {
+        if (cur.length > 1) runs.push({ points: cur, sag: 0.5 });
+        cur = [];
+      }
+      cur.push(p);
+    }
+    if (cur.length > 1) runs.push({ points: cur, sag: 0.5 });
   }
+  makeWires(ctx, runs);
 
-  // Post boxes, signs, barriers, vending against walls
-  for (const x of [-24, -10, 10, 22]) {
-    ctx.add(makePostBox({ x, z: kerbN + 0.4 }));
-    ctx.add(makeSignPost({ x: x + 3, z: kerbN + 0.15, ry: 0.05 }));
+  // Plaza planters around the edge
+  for (let i = 0; i < 8; i++) {
+    const ang = (i / 8) * Math.PI * 2 + Math.PI / 8;
+    const x = Math.cos(ang) * 7.2;
+    const z = Math.sin(ang) * 7.2;
+    loose(makePlanter({ x, z, y: 0.12 }), x, z, 0.36, 0.36, 0.75);
   }
-  for (const x of [-20, 6, 18]) {
-    ctx.add(makeBarrier({ x, z: ROAD_HALF - 0.5, ry: 0.08 }));
-  }
-
-  const vendZ = ROAD_HALF + WALK_W + FRONT_FACE();
-  for (const v of [
-    { x: -21, z: vendZ, ry: Math.PI },
-    { x: -9, z: vendZ, ry: Math.PI },
-    { x: 15, z: vendZ, ry: Math.PI },
-    { x: 25, z: -vendZ, ry: 0 },
-    { x: -16, z: -vendZ, ry: 0 },
-  ]) {
-    ctx.add(makeVending(v));
-    ctx.collide(v.x - 0.5, v.z - 0.4, v.x + 0.5, v.z + 0.4, 1.9);
-  }
-
-  // Aircons pepper building faces
-  for (let x = -28; x <= 28; x += 4.5) {
-    if (Math.abs(x) < 5) continue;
-    ctx.add(makeAircon({ x, y: 2.9, z: vendZ - 0.2 }));
-    ctx.add(makeAircon({ x: x + 1.5, y: 3.2, z: -vendZ + 0.2 }));
-  }
-}
-
-function FRONT_FACE() {
-  // approximate building front z for north row
-  return ROAD_HALF + WALK_W + 0.25;
+  void H;
 }

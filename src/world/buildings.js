@@ -73,8 +73,9 @@ export function makeHouse(o) {
   }
 
   // windows on front (+Z local, then rotated by face)
-  const winTex = litWindowTex();
-  const winMat = flat({ color: 0xffffff, map: winTex });
+  // One shared window material so per-block batching can merge them
+  if (!M.win) M.win = flat({ color: 0xffffff, map: litWindowTex(), cache: false });
+  const winMat = M.win;
   for (let f = 0; f < floors; f++) {
     const wy = fh * f + 1.35;
     for (const sx of [-w * 0.28, w * 0.28]) {

@@ -1,23 +1,30 @@
 import { defineConfig } from 'vite';
 
+// Room server listens on 19090. 8790 was the Pi port.
+const wsProxy = {
+  '/ws': {
+    target: 'ws://127.0.0.1:19090',
+    ws: true,
+    rewrite: (p) => p.replace(/^\/ws/, '') || '/',
+  },
+};
+
+const allowedHosts = ['.tailec59b1.ts.net', 'spark-043f', 'localhost', '127.0.0.1', '100.80.26.29', '192.168.1.213'];
+
 export default defineConfig({
   base: './',
   server: {
-    port: 5178,
-    host: '127.0.0.1',
+    port: 19078,
+    host: '0.0.0.0',
     open: false,
-    proxy: {
-      // Optional: ws://localhost:5178/ws → game server
-      '/ws': {
-        target: 'ws://127.0.0.1:8787',
-        ws: true,
-        rewrite: (p) => p.replace(/^\/ws/, ''),
-      },
-    },
+    allowedHosts,
+    proxy: wsProxy,
   },
   preview: {
-    port: 5179,
-    host: '127.0.0.1',
+    port: 19079,
+    host: '0.0.0.0',
+    allowedHosts,
+    proxy: wsProxy,
   },
   build: {
     outDir: 'dist',

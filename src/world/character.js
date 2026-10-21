@@ -9,11 +9,13 @@ import { hullOutline } from '../core/outline.js';
  * Clearer silhouette: longer legs, defined torso, readable head, walk/run cycle.
  * Authored facing -Z.
  */
-export function createCharacter() {
+export function createCharacter({ gender = 'm' } = {}) {
+  const female = gender === 'f';
   const skin = cel({ color: 0xf2d4bc, bands: 3, tint: 0x7a6080 });
   const hair = cel({ color: 0x2e2a3a, bands: 2, tint: 0x4a4060 });
-  const shirt = cel({ color: 0x3f74b4, bands: 3, tint: 0x4a5a90 });
-  const shirtDark = cel({ color: 0x356498, bands: 3, tint: 0x4a5a90 });
+  // Kenji: blue tee · Aoi: teal tee + orange vest (matches the concept sheets)
+  const shirt = cel({ color: female ? 0x2f8f94 : 0x3f74b4, bands: 3, tint: 0x4a5a90 });
+  const shirtDark = cel({ color: female ? 0x267a7e : 0x356498, bands: 3, tint: 0x4a5a90 });
   const pants = cel({ color: 0x454358, bands: 3, tint: 0x4a4568 });
   const shoes = cel({ color: 0x262232, bands: 2, tint: 0x3a3550 });
   const accent = cel({ color: PAL.orange, bands: 3, tint: 0x8f7050 });
@@ -41,6 +43,15 @@ export function createCharacter() {
   // Side hair volume for silhouette
   hips.add(box(0.08, 0.16, 0.14, hair, -0.16, 1.9, 0.02));
   hips.add(box(0.08, 0.16, 0.14, hair, 0.16, 1.9, 0.02));
+  if (female) {
+    // short ponytail + tie, padded safety vest panels, first-aid pouch
+    hips.add(box(0.1, 0.24, 0.1, hair, 0, 1.86, 0.2));
+    hips.add(box(0.11, 0.05, 0.11, accent, 0, 1.97, 0.19));
+    hips.add(box(0.2, 0.42, 0.06, accent, -0.12, 1.3, -0.15));
+    hips.add(box(0.2, 0.42, 0.06, accent, 0.12, 1.3, -0.15));
+    hips.add(box(0.44, 0.42, 0.06, accent, 0, 1.3, 0.15));
+    hips.add(box(0.12, 0.12, 0.08, cel({ color: PAL.red, bands: 3, tint: 0x7a4060 }), 0.2, 0.96, -0.1));
+  }
 
   const eyeMat = flat({ color: 0x221c30 });
   const eyeWhite = flat({ color: 0xf6f0e8 });
@@ -153,11 +164,26 @@ export function createCharacter() {
         this.hips.rotation.x *= 0.8;
       }
     },
-    update(pos, facingYaw, moving, run, dt) {
+    update(pos, facingYaw, moving, run, dt, air = false) {
       this.root.position.set(pos.x, pos.y, pos.z);
       this.facing = facingYaw;
       this.root.rotation.y = facingYaw;
-      this.setPose(moving, run, dt);
+      if (air) this.setAirPose(dt);
+      else this.setPose(moving, run, dt);
+    },
+    /** Tucked jump pose: knees up, arms thrown up and back. */
+    setAirPose(dt) {
+      const k = 1 - Math.exp(-18 * dt);
+      const to = (o, axis, v) => { o.rotation[axis] += (v - o.rotation[axis]) * k; };
+      to(this.legL, 'x', -0.85);
+      to(this.legR, 'x', -0.35);
+      to(this.shinL, 'x', 1.2);
+      to(this.shinR, 'x', 0.7);
+      to(this.armL, 'x', -2.4);
+      to(this.armR, 'x', -2.1);
+      to(this.armLFore, 'x', -0.3);
+      to(this.armRFore, 'x', -0.3);
+      to(this.hips, 'x', -0.12);
     },
     /** Brief hurt squash / flash cue */
     flashHurt(t) {

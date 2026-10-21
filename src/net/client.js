@@ -13,7 +13,7 @@ export function createNetClient({
   let connected = false;
   let sendAcc = 0;
 
-  function connect(name) {
+  function connect(name, gender = 'm') {
     disconnect();
     const url = wsUrl();
     const clean = sanitizeName(name);
@@ -33,6 +33,7 @@ export function createNetClient({
       ws.send(JSON.stringify({
         type: 'join',
         name: clean,
+        gender: gender === 'f' ? 'f' : 'm',
         clientId: getOrCreateClientId(),
       }));
     };

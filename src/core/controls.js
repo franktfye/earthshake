@@ -31,16 +31,23 @@ export function createControls(domElement) {
   let lookId = null;
   let lastLook = { x: 0, y: 0 };
   let runHeld = false;
+  let jumpQueued = false;
 
   // --- desktop ---
+  /** Typing in the name box / any field must never be eaten as movement. */
+  const isTyping = (e) => {
+    const t = e.target;
+    return !!t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+  };
   const onKeyDown = (e) => {
-    if (e.repeat) return;
+    if (e.repeat || isTyping(e)) return;
     keys.add(e.code);
+    if (e.code === 'Space' && state.locked) jumpQueued = true;
     if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
       e.preventDefault();
     }
   };
-  const onKeyUp = (e) => keys.delete(e.code);
+  const onKeyUp = (e) => { if (!isTyping(e)) keys.delete(e.code); };
   const onBlur = () => keys.clear();
 
   const onMouseMove = (e) => {
@@ -118,6 +125,13 @@ export function createControls(domElement) {
       runHeld = false;
       runBtn.classList.remove('on');
     };
+    ui.jumpBtn.addEventListener('pointerdown', (e) => {
+      jumpQueued = true;
+      ui.jumpBtn.classList.add('on');
+      setTimeout(() => ui.jumpBtn.classList.remove('on'), 140);
+      e.preventDefault();
+      e.stopPropagation();
+    });
     runBtn.addEventListener('pointerup', endRun);
     runBtn.addEventListener('pointercancel', endRun);
     runBtn.addEventListener('pointerleave', endRun);
@@ -156,6 +170,13 @@ export function createControls(domElement) {
     // look deltas accumulate via listeners; we snapshot and clear each frame after player reads them
   }
 
+  /** One-shot jump request (Space / JUMP button); cleared when read. */
+  function consumeJump() {
+    const j = jumpQueued;
+    jumpQueued = false;
+    return j;
+  }
+
   function sample() {
     const look = { dx: state.lookDx, dy: state.lookDy };
     state.lookDx = 0;
@@ -189,7 +210,12 @@ export function createControls(domElement) {
       state.locked = true;
       return;
     }
-    domElement.requestPointerLock?.();
+    // Without a fresh user gesture (e.g. a round auto-starting) browsers
+    // reject; the canvas click handler re-locks on the next click.
+    try {
+      const r = domElement.requestPointerLock?.();
+      if (r && typeof r.catch === 'function') r.catch(() => {});
+    } catch { /* not allowed yet */ }
   }
 
   function unlock() {
@@ -207,6 +233,7 @@ export function createControls(domElement) {
   return {
     state,
     sample,
+    consumeJump,
     poll,
     lock,
     unlock,
@@ -224,6 +251,7 @@ function buildMobileUI() {
       <div class="stick-base"><div class="stick-knob"></div></div>
     </div>
     <button type="button" class="run-btn" aria-label="Run">RUN</button>
+    <button type="button" class="jump-btn" aria-label="Jump">JUMP</button>
   `;
   document.body.appendChild(root);
   return {
@@ -231,5 +259,6 @@ function buildMobileUI() {
     stickZone: root.querySelector('.stick-zone'),
     knob: root.querySelector('.stick-knob'),
     runBtn: root.querySelector('.run-btn'),
+    jumpBtn: root.querySelector('.jump-btn'),
   };
 }

@@ -1,51 +1,137 @@
 # Aftershock — 余震
 
-One-map earthquake run-for-life. Cel-shaded Three.js (sakura-crossing construction method) + optional WebSocket multiplayer (max **30**).
+*Made by Frank.*
 
-## Run (FUSE-safe)
+A multiplayer earthquake run-for-life in a cel-shaded Japanese town. Up to
+**30** runners share one quake timeline: the ground splits into fissures,
+debris rains from rooftops, houses collapse into the street and runaway cars
+tear down the lanes. Dodge, sprint, jump — last one standing wins.
 
-```bash
-cd game
-npm run setup      # install deps into /tmp/aftershock
-npm run server     # terminal A — WS room on :8787
-npm run dev        # terminal B — client on http://127.0.0.1:5178
-```
+Three.js (sakura-crossing construction method) + PINOC Gaussian-splat
+characters (`@viggle/splat-engine` / PlayCanvas) + a small Node WebSocket
+room server.
 
-Open two browser windows → enter different names → **Join & run**. You should see each other’s third-person avatars + nametags.
-
-If the server isn’t up, the client falls back to **solo offline** after ~2.5s.
-
-Production-ish:
+## Run
 
 ```bash
-npm run build
-npm run server
-npm run preview    # :5179 — still expects WS on :8787
+npm install
+node server/index.js                         # WS room on :19090 (PORT / HOST env)
+node node_modules/vite/bin/vite.js           # dev client on http://127.0.0.1:19078
 ```
 
-Override WS URL: `?ws=ws://host:8787` or `VITE_WS_URL`.
+Production-ish: `node node_modules/vite/bin/vite.js build`, then
+`node node_modules/vite/bin/vite.js preview` (:19079, expects WS on :19090).
+If the server isn't reachable the client falls back to **solo offline** after
+~2.5 s. Override the WS URL with `?ws=ws://host:19090` or `VITE_WS_URL`.
 
-## Multiplayer protocol (sketch)
-
-| Dir | Type | Purpose |
-|-----|------|---------|
-| C→S | `join` | `{ name, clientId? }` — reject with `full` at 30 |
-| S→C | `welcome` | `{ id, seed, startedAt, players[] }` |
-| S→C | `full` | server full message |
-| S→C | `join` / `leave` | peer presence |
-| C→S | `state` | `{ x,y,z, facing, yaw, moving, run, alive }` ~20 Hz |
-| S→C | `states` | batched peer snapshots ~20 Hz |
-
-**Hazards:** server sends one room `seed` + `startedAt`. Every client drives disaster from `roomElapsed = (now - startedAt) / 1000` with a **deterministic** scheduler (no player-relative picks). Late joiners catch up by fast-forwarding due events. Death is local; retry respawns you in the same room without rebuilding the shared map when online.
+On spark the user units `aftershock-server.service` (WS :19090) and
+`aftershock.service` (`vite preview` of `dist/` on :19079) run it; rebuild and
+restart both (only restart the room when `/health` shows no players).
 
 ## Controls
 
 | Desktop | Mobile |
 |---|---|
-| WASD, Shift run, mouse orbit | Stick + RUN / magnitude, drag orbit |
+| WASD walk · Shift run · Space jump · mouse orbit | Stick walk · RUN · JUMP · drag orbit |
+
+Login card: name + character (Kenji / Aoi), auto full screen on join, full
+screen toggle in the top bar. Corner minimap shows streets, open fissures and
+survivors.
+
+## Rounds
+
+- **Versus** (2+ players when the round starts): ends when one runner is left
+  standing — they win and rank first.
+- **Solo** (1 player): ends when you die or after a **10:00** cap (countdown
+  chip at the top). Offline solo uses the same cap.
+- Joining while a round is running → **observer** (birdview / follow) until it
+  ends; observers aren't ranked.
+- Losing pulls the camera up into a birdview of the whole town with marker
+  pillars over survivors; click / tap cycles following survivors.
+- The leaderboard stays up until *Play again* (which readies you in the
+  lobby); the next-round countdown runs under it.
+
+## Rules & hazards
+
+- 3 lives. Hit or fall → red screen flash (~2.5 s) and a life lost.
+- Sprint drains energy; at empty you drop to a walk until you release sprint
+  and recover 25 %.
+- Jump: ~0.95 m apex, ~0.7 s airtime, costs 6 % energy — clears bins and
+  narrow cracks; you only fall into a fissure if you land in it.
+- Telegraphs (1 s): a closing red target ring + growing shadow for falling
+  objects, the exact red outline for fissures, creaking + shaking for houses,
+  honk + red lane chevrons (1.2 s) for runaway cars.
+- Fissures: `pit`, `chasm` and narrow `crack`; up to 6 open per zone, 60 s
+  each — late game keeps ~30 open map-wide.
+- Fallen objects, collapse rubble and car wrecks stay **solid for 35 s** (max
+  26 per zone); a fissure opening under them swallows them.
+- Players, street clutter (bins, planters, bikes, cones), parked cars and
+  wrecks are solid.
+
+## Map
+
+120 m square town on a 3×3 street grid: two 5.2 m boulevards crossing at a
+central plaza with a clock monument, four 3.8 m side streets, 1 m sidewalks.
+Every block is split by a walkable 3 m back lane with narrow house rows on
+both the road frontage and the lane (~300 collapsible houses, batched one mesh
+per material per block), parked kei trucks / sedans / vans along the kerbs.
+30 spread-out spawn slots (`spawnPoints()` in `src/world/street.js`); the
+server assigns `slot`. The chase camera pulls in front of walls in narrow
+streets.
+
+## Characters
+
+Kenji (`aftershock-hero-sheet.jpg`) and Aoi (`aftershock-heroine-sheet.jpg`,
+concept art from the grok CLI `image_edit` using Kenji's sheet as the style
+reference), sent in `join.gender`. Both are PINOC Gaussian-splat characters
+(`public/character/aftershock-{hero,heroine}.{high,performance}.vsplat`; Aoi =
+PINOC asset `85fd5ff8-815a-47f6-89e2-3226f40e2a90`, built from the concept
+sheet). Motions are PINOC library clips (idle / walk / run / hit / Jump /
+Run Jump; jumps sped up ~2.2× to fit the hop). A missing splat or clip falls
+back to the procedural body / pose automatically.
+
+## Multiplayer & determinism
+
+| Dir | Type | Purpose |
+|-----|------|---------|
+| C→S | `join` | `{ name, gender, clientId? }` — `full` at 30 |
+| S→C | `welcome` | `{ id, phase, seed, startedAt, serverNow, lobby, players[] }` |
+| S→C | `lobby` | lobby snapshot (players, ready, countdown) |
+| C→S | `ready` | ready up |
+| S→C | `roundStart` | `{ seed, startedAt, serverNow, mode, endsAt, players[] (slot, gender), spectate? }` |
+| C→S | `state` | `{ x,y,z, facing, yaw, moving, run, air, alive, lives, score, survived }` ~20 Hz |
+| S→C | `states` | batched peer snapshots ~20 Hz |
+| S→C | `roundEnd` | `{ scores[], reason, mode, winnerId }` |
+
+The server sends one room `seed` + `startedAt` (+ `serverNow` for clock
+offset). Every client drives the disaster from `roomElapsed` with a
+deterministic scheduler: five zones (plaza + 4 quadrants) each run a seeded
+clock, events are processed in time order, and placement only reads an
+event-time log — so late joiners fast-forwarding reproduce exactly the same
+fissures, drops, collapses and cars. Falling objects, rubble flight and car
+paths are closed-form in time; cosmetic randomness uses per-entity RNGs.
+Hits are resolved locally.
+
+Fissures share one analytic outline (`src/world/fissureShape.js`) between the
+ground-cut shader (`holePunch.js`), the 6.5 m shaft mesh, the warning decal
+and the kill test. Debug hooks: `__aftershockSpawnFissure(x, z, kind)`,
+`__aftershockSpawnDrop(x, z)`, `__aftershockSpawnCar(x, z)`,
+`__aftershockCollapseNear(x, z)`, `window.__aftershock`.
+
+## Audio
+
+SFX were generated with **Stable Audio Open 1.0** (`scripts/sfx/generate.py`:
+3–4 candidates per prompt, best picked by CLAP similarity; the diffusers
+Brownian-tree noise sampler is swapped for plain Gaussian noise because it
+recurses forever / NaNs on this stack), then `scripts/sfx/finish.sh` trims,
+fades, loudness-normalises and encodes to `public/audio/sfx/*.mp3` (the rumble
+becomes a seamless loop via `loop.py`). `src/core/sfx.js` plays them
+positionally (distance + stereo pan) and drives the rumble bed from quake
+intensity; muted together with the BGM button.
 
 ## Limits
 
-- Soft cap **30** concurrent sockets; 31st gets `full` UI
-- No accounts/passwords — display name + `localStorage` client id
-- Debris hits / collapse kill volumes are still client-side (same timeline, local resolution)
+- Soft cap **30** concurrent sockets; the 31st gets the `full` screen.
+- No accounts/passwords — display name + `localStorage` client id.
+- Hits and collapse kill volumes are resolved client-side (same timeline,
+  local resolution).

@@ -7,6 +7,9 @@ const STEP = 0.38;
 const CAM_DIST = 5.2;
 const CAM_HEIGHT = 2.35;
 const CAM_LOOK = 1.15;
+/** Jump launch speed / gravity → ~0.95 m apex, ~0.7 s airtime. */
+const JUMP_V = 5.4;
+const JUMP_G = 15;
 
 /** Third-person walker with stylized human mesh + energy. */
 export class Player {
@@ -35,6 +38,7 @@ export class Player {
     this.maxEnergy = 1;
     this.maxLives = 3;
     this.lives = this.maxLives;
+    this.exhausted = false;
     this.alive = true;
     this.playing = false;
     this.facing = this.yaw;
@@ -75,9 +79,38 @@ export class Player {
     this.footRing.position.y = 0.05;
     this.character.root.add(this.footRing);
 
+    /** Positions of other living players ({x, z}), refreshed by main each frame. */
+    this.others = [];
+    this.onFall = null;
+    this.onJump = null;
+    this.onLand = null;
+    this.airborne = false;
+    this.vy = 0;
     this.onDeath = null;
     this.onHurt = null;
     this.applyCamera(0);
+  }
+
+  /** Move the respawn slot (multiplayer spreads players over the map). */
+  setSpawn(x, z, yaw = this.spawn.yaw) {
+    this.spawn.pos.set(x, 0, z);
+    this.spawn.yaw = yaw;
+  }
+
+  /** Nearest point outside every hole, searching outward from here. */
+  _safeSpot() {
+    const w = this.world;
+    for (let r = 1; r <= 14; r += 1) {
+      for (let k = 0; k < 12; k++) {
+        const a = (k / 12) * Math.PI * 2;
+        const x = this.pos.x + Math.cos(a) * r;
+        const z = this.pos.z + Math.sin(a) * r;
+        if (w.inKillHole(x, z)) continue;
+        if (w.isOpenGround && !w.isOpenGround(x, z, 0.3)) continue;
+        return { x, z };
+      }
+    }
+    return { x: this.spawn.pos.x, z: this.spawn.pos.z };
   }
 
   get locked() {
@@ -93,8 +126,12 @@ export class Player {
     this.bob = 0;
     this.energy = 1;
     this.lives = this.maxLives;
+    this.exhausted = false;
     this.alive = true;
     this.invuln = 0;
+    this._fallV = 0;
+    this.airborne = false;
+    this.vy = 0;
     this.shake = 0;
     this.hitFlash = 0;
     this._camReady = false;
@@ -151,6 +188,22 @@ export class Player {
     this.shake = Math.min(1.6, this.shake + amount);
   }
 
+  /** Other living players are solid: circle-vs-circle push-out. */
+  _resolveOthers() {
+    const min = 0.9; // two shoulder-width bodies
+    for (const o of this.others) {
+      const dx = this.pos.x - o.x;
+      const dz = this.pos.z - o.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 >= min * min) continue;
+      const d = Math.sqrt(d2);
+      const nx = d > 1e-4 ? dx / d : 1;
+      const nz = d > 1e-4 ? dz / d : 0;
+      this.pos.x += nx * (min - d);
+      this.pos.z += nz * (min - d);
+    }
+  }
+
   _resolve(colliders, feetY) {
     const p = this.pos;
     const r = RADIUS;
@@ -172,7 +225,8 @@ export class Player {
 
   update(dt) {
     this.invuln = Math.max(0, this.invuln - dt);
-    this.hitFlash = Math.max(0, this.hitFlash - dt * 1.5);
+    // red screen flash lingers ~2.5 s after a hit / fall
+    this.hitFlash = Math.max(0, this.hitFlash - dt * 0.4);
 
     if (!this.alive || !this.playing) {
       this.character.update(this.pos, this.facing, 0, false, dt);
@@ -205,7 +259,11 @@ export class Player {
       fwd /= wishLen;
       side /= wishLen;
     }
-    if (wantRun && this.energy < 0.05) wantRun = false;
+    // Exhausted: drop to a walk and stay there until sprint is released and
+    // the bar has meaningfully recovered (no run/walk stutter at empty).
+    if (this.energy <= 0.01) this.exhausted = true;
+    if (this.exhausted && !st.sprint && this.energy >= 0.25) this.exhausted = false;
+    if (this.exhausted) wantRun = false;
 
     const speed = wantRun ? this.runSpeed : this.walkSpeed;
 
@@ -220,51 +278,69 @@ export class Player {
       this.facing = Math.atan2(-this._wish.x, -this._wish.z);
     }
 
-    const accel = this._wish.lengthSq() > 1e-6 ? 13 : 16;
+    // Jump: real airtime — clears bins/cones and narrow cracks; costs a little energy
+    const wantJump = this.controls.consumeJump?.();
+    if (wantJump && !this.airborne && !this._fallV && this.energy >= 0.06) {
+      this.airborne = true;
+      this.vy = JUMP_V;
+      this.energy -= 0.06;
+      this.onJump?.();
+    }
+
+    const accel = this.airborne ? 3 : (this._wish.lengthSq() > 1e-6 ? 13 : 16);
     const a = 1 - Math.exp(-accel * dt);
     this.vel.x += (this._wish.x - this.vel.x) * a;
     this.vel.z += (this._wish.z - this.vel.z) * a;
 
     const feetY = this.world.heightAt(this.pos.x, this.pos.z);
-    const stepX = this.vel.x * dt;
-    const stepZ = this.vel.z * dt;
+    // Once falling into a shaft there's no walking back out
+    const falling = this._fallV > 0 && this.world.inKillHole(this.pos.x, this.pos.z);
+    if (!falling) this._fallV = 0;
+    const stepX = falling ? 0 : this.vel.x * dt;
+    const stepZ = falling ? 0 : this.vel.z * dt;
     const n = Math.max(1, Math.ceil(Math.max(Math.abs(stepX), Math.abs(stepZ)) / 0.18));
+    const feetNow = this.airborne ? Math.max(feetY, this.pos.y) : feetY;
     for (let i = 0; i < n; i++) {
       this.pos.x += stepX / n;
-      this._resolve(this.world.colliders, feetY);
+      this._resolve(this.world.colliders, feetNow);
       this.pos.z += stepZ / n;
-      this._resolve(this.world.colliders, feetY);
+      this._resolve(this.world.colliders, feetNow);
+      this._resolveOthers();
+    }
+
+    if (this.airborne) {
+      this.vy -= JUMP_G * dt;
+      this.pos.y += this.vy * dt;
+      const ground = this.world.surfaceAt ? this.world.surfaceAt(this.pos.x, this.pos.z) : 0;
+      if (this.vy < 0 && this.pos.y <= ground) {
+        this.pos.y = ground;
+        this.airborne = false;
+        this.vy = 0;
+        this.onLand?.();
+      }
     }
 
     const b = this.world.bounds;
     this.pos.x = clamp(this.pos.x, b.x0, b.x1);
     this.pos.z = clamp(this.pos.z, b.z0, b.z1);
 
-    if (this.world.inKillHole(this.pos.x, this.pos.z)) {
-      this.pos.y -= 8 * dt;
+    if (!this.airborne && this.world.inKillHole(this.pos.x, this.pos.z)) {
+      // Gravity fall so the drop into the shaft actually reads on camera
+      if (!this._fallV) this.onFall?.();
+      this._fallV = (this._fallV || 1.5) + 22 * dt;
+      this.pos.y -= this._fallV * dt;
+      this.vel.multiplyScalar(Math.exp(-6 * dt));
       this.character.update(this.pos, this.facing, 0, false, dt);
-      if (this.pos.y < -1.2) {
-        // Rescue to nearest hole edge if lives remain
-        let rescue = null;
-        for (const h of this.world.holes) {
-          if (this.pos.x >= h.x0 && this.pos.x <= h.x1 &&
-              this.pos.z >= h.z0 && this.pos.z <= h.z1) {
-            const cx = (h.x0 + h.x1) / 2;
-            const cz = (h.z0 + h.z1) / 2;
-            const dx = this.pos.x - cx;
-            const dz = this.pos.z - cz;
-            const len = Math.hypot(dx, dz) || 1;
-            rescue = {
-              x: cx + (dx / len) * (Math.max(h.w, h.d) * 0.5 + 1.1),
-              z: cz + (dz / len) * (Math.max(h.w, h.d) * 0.5 + 1.1),
-            };
-            break;
-          }
-        }
+      if (this.pos.y < -3.2) {
+        this._fallV = 0;
+        // Rescue to the nearest safe rim point if lives remain
+        const hole = this.world.holeAt?.(this.pos.x, this.pos.z)
+          || this.world.holes.find((h) => h.contains(this.pos.x, this.pos.z));
+        const rescue = hole?.rescuePoint?.(this.pos.x, this.pos.z) || null;
         this.takeHit('fell', {
           shake: 1.0,
           invuln: 2.0,
-          rescue: rescue || { x: this.spawn.pos.x, z: this.spawn.pos.z },
+          rescue: rescue || this._safeSpot(),
           kx: 0,
           kz: 0,
         });
@@ -273,8 +349,10 @@ export class Player {
       return;
     }
 
-    const targetY = this.world.heightAt(this.pos.x, this.pos.z, this.pos.y);
-    this.pos.y += (targetY - this.pos.y) * (1 - Math.exp(-18 * dt));
+    if (!this.airborne) {
+      const targetY = this.world.heightAt(this.pos.x, this.pos.z, this.pos.y);
+      this.pos.y += (targetY - this.pos.y) * (1 - Math.exp(-18 * dt));
+    }
 
     const moving = Math.hypot(this.vel.x, this.vel.z);
     // Energy: sprint drains; walk and stand both recharge
@@ -288,8 +366,46 @@ export class Player {
     this.shake = Math.max(0, this.shake - dt * 2.2);
     this.footRing.material.opacity = 0.35 + Math.min(moving / this.runSpeed, 1) * 0.35;
 
-    this.character.update(this.pos, this.facing, moving, wantRun, dt);
+    this.character.update(this.pos, this.facing, moving, wantRun, dt, this.airborne);
     this.applyCamera(moving);
+  }
+
+  /** Pull `cam` toward `from` so the segment between them clears every tall collider. */
+  _clipCamera(from, cam) {
+    const dx = cam.x - from.x;
+    const dy = cam.y - from.y;
+    const dz = cam.z - from.z;
+    const len = Math.hypot(dx, dy, dz);
+    if (len < 0.01) return;
+    const pad = 0.3;
+    const bx0 = Math.min(from.x, cam.x) - pad;
+    const bx1 = Math.max(from.x, cam.x) + pad;
+    const bz0 = Math.min(from.z, cam.z) - pad;
+    const bz1 = Math.max(from.z, cam.z) + pad;
+    let tMin = 1;
+    for (const c of this.world.colliders) {
+      if ((c.top ?? 99) < 2.0) continue; // low walls / objects / cars: look over them
+      if (c.x1 < bx0 || c.x0 > bx1 || c.z1 < bz0 || c.z0 > bz1) continue;
+      let t0 = 0;
+      let t1 = tMin;
+      const slab = (o, d, lo, hi) => {
+        if (Math.abs(d) < 1e-6) return o >= lo && o <= hi;
+        let a = (lo - o) / d;
+        let b = (hi - o) / d;
+        if (a > b) { const tmp = a; a = b; b = tmp; }
+        if (a > t0) t0 = a;
+        if (b < t1) t1 = b;
+        return t0 <= t1;
+      };
+      if (!slab(from.x, dx, c.x0 - pad, c.x1 + pad)) continue;
+      if (!slab(from.z, dz, c.z0 - pad, c.z1 + pad)) continue;
+      if (!slab(from.y, dy, c.bottom ?? -1, (c.top ?? 99) + pad)) continue;
+      if (t0 > 0 && t0 < tMin) tMin = t0;
+    }
+    if (tMin < 1) {
+      const k = Math.max(0.12, tMin - 0.05 / len);
+      cam.set(from.x + dx * k, from.y + dy * k, from.z + dz * k);
+    }
   }
 
   applyCamera(moving) {
@@ -310,6 +426,8 @@ export class Player {
       // frame-rate independent-ish smooth — use fixed blend from dt via moving path
       this._smoothCam.lerp(this._camPos, 0.18);
     }
+    // Narrow streets: never let the chase camera sit inside / behind a house
+    this._clipCamera(this._lookAt, this._smoothCam);
 
     let sx = 0, sy = 0, sz = 0;
     if (this.shake > 0.01) {

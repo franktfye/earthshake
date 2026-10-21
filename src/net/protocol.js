@@ -30,9 +30,10 @@ export function wsUrl() {
   if (params.get('ws')) return params.get('ws');
   if (import.meta.env?.VITE_WS_URL) return import.meta.env.VITE_WS_URL;
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  // Vite proxy /ws → :8787 in dev; otherwise same host :8787
-  if (location.port === '5178' || location.port === '5179') {
-    return `${proto}//${location.hostname}:8787`;
+  // Direct dev/preview. Room server is 19090 on this Spark.
+  // Any other port uses the /ws proxy on the page host.
+  if (location.port === '19078' || location.port === '19079') {
+    return `${proto}//${location.hostname}:19090`;
   }
   return `${proto}//${location.host}/ws`;
 }

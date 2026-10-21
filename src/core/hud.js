@@ -19,8 +19,28 @@ export function createHud() {
       <span class="mute-icon" aria-hidden="true">♪</span>
       <span class="mute-label">Sound</span>
     </button>
+    <button type="button" class="mute-btn fs-btn" aria-label="Toggle full screen" title="Full screen">
+      <span class="mute-icon" aria-hidden="true">⛶</span>
+      <span class="fs-label">Full screen</span>
+    </button>
   `);
   const muteBtn = topBar.querySelector('.mute-btn');
+  const fsBtn = topBar.querySelector('.fs-btn');
+  const fsEl = document.documentElement;
+  const fsSupported = !!(fsEl.requestFullscreen || fsEl.webkitRequestFullscreen);
+  if (!fsSupported) fsBtn.style.display = 'none'; // iPhone Safari: no page fullscreen
+  const isFs = () => !!(document.fullscreenElement || document.webkitFullscreenElement);
+  fsBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (isFs()) (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+    else requestFullscreen();
+  });
+  const syncFs = () => {
+    fsBtn.classList.toggle('is-on', isFs());
+    fsBtn.querySelector('.fs-label').textContent = isFs() ? 'Exit full screen' : 'Full screen';
+  };
+  document.addEventListener('fullscreenchange', syncFs);
+  document.addEventListener('webkitfullscreenchange', syncFs);
   let onMuteToggle = null;
   muteBtn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -54,20 +74,47 @@ export function createHud() {
   const spectateBanner = el('div', 'spectate-banner', root, `
     <strong>Spectating</strong> · Waiting for round to end
   `);
+  const roundTimer = el('div', 'round-timer', root, '');
 
   const lobby = el('div', 'lobby-panel', root, `
     <div class="lobby-head">
-      <div class="lobby-title">Lobby</div>
-      <div class="lobby-slots"><span class="lobby-filled">0</span>/30</div>
+      <div>
+        <div class="lobby-kicker">ROOM · 余震</div>
+        <div class="lobby-title">Waiting for runners</div>
+      </div>
+      <div class="lobby-clock"><span class="lobby-secs">60</span><small>s</small></div>
     </div>
-    <div class="lobby-countdown">—</div>
+    <div class="lobby-meter"><div class="lobby-meter-fill"></div><div class="lobby-meter-ready"></div></div>
+    <div class="lobby-sub">
+      <span><b class="lobby-filled">0</b>/<span class="lobby-max">30</span> joined · <b class="lobby-readyn">0</b> ready</span>
+      <span class="lobby-mode">auto-start</span>
+    </div>
     <ul class="lobby-list"></ul>
-    <button type="button" class="lobby-ready">Ready</button>
+    <button type="button" class="lobby-ready">I'm ready</button>
   `);
   const lobbyFilled = lobby.querySelector('.lobby-filled');
-  const lobbyCountdown = lobby.querySelector('.lobby-countdown');
+  const lobbyMax = lobby.querySelector('.lobby-max');
+  const lobbyReadyN = lobby.querySelector('.lobby-readyn');
+  const lobbySecs = lobby.querySelector('.lobby-secs');
+  const lobbyMode = lobby.querySelector('.lobby-mode');
+  const lobbyMeterFill = lobby.querySelector('.lobby-meter-fill');
+  const lobbyMeterReady = lobby.querySelector('.lobby-meter-ready');
   const lobbyList = lobby.querySelector('.lobby-list');
   const lobbyReadyBtn = lobby.querySelector('.lobby-ready');
+
+  const results = el('div', 'results-panel', root, `
+    <div class="lobby-kicker">ROUND OVER · 余震</div>
+    <div class="results-title">Results</div>
+    <div class="results-me"></div>
+    <ol class="results-list"></ol>
+    <button type="button" class="lobby-ready results-again">Play again →</button>
+    <div class="results-foot"><span class="results-clock"></span></div>
+  `);
+  const resultsMe = results.querySelector('.results-me');
+  const resultsClock = results.querySelector('.results-clock');
+  let onPlayAgain = null;
+  results.querySelector('.results-again').addEventListener('click', () => onPlayAgain?.());
+  const resultsList = results.querySelector('.results-list');
   let onReady = null;
   lobbyReadyBtn.addEventListener('click', () => onReady?.());
 
@@ -109,14 +156,24 @@ export function createHud() {
             placeholder="Your name" value="${escapeAttr(savedName)}" />
         </label>
         <p class="name-error start-only" hidden></p>
+        <div class="gender-pick start-only" role="radiogroup" aria-label="Character">
+          <button type="button" class="gender-card" data-gender="m" role="radio">
+            <img src="./character/aftershock-hero-sheet.jpg" alt="" /><span>Kenji</span>
+          </button>
+          <button type="button" class="gender-card" data-gender="f" role="radio">
+            <img src="./character/aftershock-heroine-sheet.jpg" alt="" /><span>Aoi</span>
+          </button>
+        </div>
         <div class="control-strip desktop-only">
           <span><b>WASD</b> Walk (recharges)</span>
           <span><b>Shift</b> Run (drains)</span>
+          <span><b>Space</b> Jump</span>
           <span><b>Mouse</b> Orbit</span>
         </div>
         <div class="control-strip mobile-only">
           <span><b>Stick</b> Walk (recharges)</span>
           <span><b>RUN</b> Drains</span>
+          <span><b>JUMP</b> Hop gaps</span>
           <span><b>Drag</b> Orbit</span>
         </div>
         <button class="menu-action" type="button">
@@ -126,6 +183,7 @@ export function createHud() {
           <i aria-hidden="true">→</i>
         </button>
         <p class="net-status start-only"></p>
+        <p class="made-by">Made by Frank</p>
       </div>
     </section>`;
 
@@ -142,6 +200,26 @@ export function createHud() {
   let onStart = null;
   let toastTimer = 0;
 
+  // Character / gender choice (remembered)
+  let gender = 'm';
+  try { gender = localStorage.getItem('aftershock-gender') === 'f' ? 'f' : 'm'; } catch { /* */ }
+  const genderCards = [...overlay.querySelectorAll('.gender-card')];
+  const syncGender = () => {
+    for (const c of genderCards) {
+      const on = c.dataset.gender === gender;
+      c.classList.toggle('on', on);
+      c.setAttribute('aria-checked', on ? 'true' : 'false');
+    }
+  };
+  for (const c of genderCards) {
+    c.addEventListener('click', () => {
+      gender = c.dataset.gender;
+      try { localStorage.setItem('aftershock-gender', gender); } catch { /* */ }
+      syncGender();
+    });
+  }
+  syncGender();
+
   actionBtn.addEventListener('click', () => {
     if (overlay.dataset.mode === 'full') {
       showStart();
@@ -157,22 +235,43 @@ export function createHud() {
       }
       nameError.hidden = true;
       try { localStorage.setItem(NAME_KEY, name); } catch { /* */ }
-      onStart?.(name);
+      onStart?.(name, gender);
       return;
     }
     // dead / round-end → back to name/start (lobby rejoins via onStart)
-    onStart?.(sanitizeName(nameInput?.value) || savedName || 'Runner');
+    onStart?.(sanitizeName(nameInput?.value) || savedName || 'Runner', gender);
   });
 
   nameInput?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') actionBtn.click();
   });
 
+  /** Must run inside a user gesture (button click / Join). */
+  function requestFullscreen() {
+    if (!fsSupported || isFs()) return;
+    try {
+      const r = (fsEl.requestFullscreen || fsEl.webkitRequestFullscreen).call(fsEl, { navigationUI: 'hide' });
+      if (r && typeof r.catch === 'function') r.catch(() => {});
+    } catch { /* not allowed */ }
+  }
+
   function setMobile(isMobile) {
     root.classList.toggle('is-mobile', isMobile);
   }
 
+  function hideResults() { results.classList.remove('on'); }
+
+  /** Solo-round cap countdown chip (null hides it). */
+  function setRoundTimer(secondsLeft) {
+    if (secondsLeft == null) { roundTimer.classList.remove('on'); return; }
+    const s = Math.max(0, Math.ceil(secondsLeft));
+    roundTimer.textContent = `⏱ ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')} left`;
+    roundTimer.classList.add('on');
+    roundTimer.classList.toggle('urgent', s <= 30);
+  }
+
   function showStart() {
+    results.classList.remove('on');
     overlay.dataset.mode = 'start';
     overlay.classList.add('on');
     vitals.classList.remove('on');
@@ -182,6 +281,7 @@ export function createHud() {
   }
 
   function showPlaying() {
+    results.classList.remove('on');
     overlay.classList.remove('on');
     lobby.classList.remove('on');
     spectateBanner.classList.remove('on');
@@ -189,6 +289,7 @@ export function createHud() {
   }
 
   function showLobby() {
+    results.classList.remove('on');
     overlay.classList.remove('on');
     vitals.classList.remove('on');
     spectateBanner.classList.remove('on');
@@ -199,36 +300,40 @@ export function createHud() {
     lobby.classList.remove('on');
   }
 
+  const CHIP_COLORS = ['#c84830', '#3d6ec4', '#2f9c9a', '#d39c1f', '#7a5aa8', '#4f8a4a', '#b0507a', '#8a6a4a'];
+  const chipColor = (id) => CHIP_COLORS[[...String(id)].reduce((a, c) => a + c.charCodeAt(0), 0) % CHIP_COLORS.length];
+
   function updateLobby({ filled, max, endsAt, serverNow, mode, players, myId, ready }) {
-    lobbyFilled.textContent = String(filled ?? players?.length ?? 0);
+    const list = players || [];
+    const slots = max || 30;
+    const n = filled ?? list.length;
+    const nReady = list.filter((p) => p.ready).length;
+    lobbyFilled.textContent = String(n);
+    lobbyMax.textContent = String(slots);
+    lobbyReadyN.textContent = String(nReady);
     const now = serverNow || Date.now();
     const left = Math.max(0, Math.ceil(((endsAt || now) - now) / 1000));
-    if (mode === 'starting') {
-      lobbyCountdown.textContent = `All ready — starting in ${left}s`;
-    } else {
-      lobbyCountdown.textContent = `Auto-start in ${left}s · or Ready up`;
-    }
+    lobbySecs.textContent = String(left);
+    lobby.classList.toggle('starting', mode === 'starting');
+    lobbyMode.textContent = mode === 'starting' ? 'everyone ready — starting!' : 'starts when timer ends or all ready';
+    lobbyMeterFill.style.width = `${(n / slots) * 100}%`;
+    lobbyMeterReady.style.width = `${(nReady / slots) * 100}%`;
     lobbyList.innerHTML = '';
-    const slots = max || 30;
-    const list = players || [];
-    for (let i = 0; i < slots; i++) {
+    for (const p of list) {
       const li = document.createElement('li');
-      const p = list[i];
-      if (p) {
-        li.className = 'filled' + (p.ready ? ' is-ready' : '') + (p.id === myId ? ' is-me' : '');
-        li.innerHTML = `<span class="nm">${escapeAttr(p.name)}</span>`
-          + `<span class="st">${p.ready ? 'Ready' : '…'}</span>`;
-      } else {
-        li.className = 'empty';
-        li.textContent = 'Empty';
-      }
+      li.className = (p.ready ? 'is-ready' : '') + (p.id === myId ? ' is-me' : '');
+      const initial = escapeAttr((p.name || '?').trim().charAt(0).toUpperCase() || '?');
+      li.innerHTML = `<span class="av" style="background:${chipColor(p.id)}">${initial}</span>`
+        + `<span class="nm">${escapeAttr(p.name)}${p.id === myId ? ' <em>you</em>' : ''}</span>`
+        + `<span class="st">${p.ready ? '✓' : ''}</span>`;
       lobbyList.appendChild(li);
     }
     lobbyReadyBtn.disabled = !!ready;
-    lobbyReadyBtn.textContent = ready ? 'Waiting…' : 'Ready';
+    lobbyReadyBtn.textContent = ready ? 'Ready ✓ — waiting for others' : "I'm ready";
   }
 
-  function showSpectate() {
+  function showSpectate(html) {
+    spectateBanner.innerHTML = html || '<strong>Out</strong> · watching until the round ends';
     spectateBanner.classList.add('on');
     vitals.classList.add('on');
     overlay.classList.remove('on');
@@ -251,21 +356,34 @@ export function createHud() {
     spectateBanner.classList.remove('on');
   }
 
-  function showRoundEnd({ scores, best: bestScoreVal }) {
-    const top = (scores || []).slice(0, 5)
-      .map((s, i) => `${i + 1}. ${s.name} — ${s.score}`)
-      .join('<br/>') || '—';
-    overlay.dataset.mode = 'dead';
-    deathReason.innerHTML = `Round over<br/><span class="round-scores">${top}</span>`;
-    finalTime.textContent = '—';
-    finalScore.textContent = scores?.[0] ? String(scores.find((s) => s)?.score ?? 0) : '0';
-    // show local best if provided
-    if (bestScoreVal != null) bestScore.textContent = String(Math.floor(bestScoreVal));
-    const deadOnly = overlay.querySelector('.dead-only');
-    if (deadOnly) deadOnly.textContent = 'Round results';
-    const btn = overlay.querySelector('.menu-action .dead-only');
-    if (btn) btn.textContent = 'Back to lobby';
-    overlay.classList.add('on');
+  function showRoundEnd({ scores, myId, reason, winnerId, mode }) {
+    const list = scores || [];
+    roundTimer.classList.remove('on');
+    const winner = list.find((sc) => sc.id === winnerId);
+    const title = results.querySelector('.results-title');
+    if (reason === 'last-standing' && winner) {
+      title.textContent = winner.id === myId ? 'You are the last one standing!' : `${winner.name} is the last one standing`;
+    } else if (reason === 'time') {
+      title.textContent = winner?.id === myId ? 'You outlasted the aftershock!' : 'Survived the full 10 minutes';
+    } else {
+      title.textContent = mode === 'solo' ? 'The town took you' : 'Nobody made it';
+    }
+    resultsList.innerHTML = '';
+    list.slice(0, 30).forEach((sc, i) => {
+      const li = document.createElement('li');
+      li.className = (sc.id === myId ? 'is-me ' : '') + (i < 3 ? `top top${i + 1}` : '');
+      li.innerHTML = `<span class="rk">${sc.id === winnerId ? '🏆' : i + 1}</span>`
+        + `<span class="nm">${escapeAttr(sc.name)}${sc.id === myId ? ' <em>you</em>' : ''}${sc.alive ? ' <em class="alive">standing</em>' : ''}</span>`
+        + `<span class="tm">${formatTime(sc.survived || 0)}</span>`
+        + `<span class="sc">${sc.score}</span>`;
+      resultsList.appendChild(li);
+    });
+    const rank = list.findIndex((sc) => sc.id === myId);
+    resultsMe.innerHTML = rank >= 0
+      ? `You placed <b>#${rank + 1}</b> of ${list.length} · survived <b>${formatTime(list[rank].survived || 0)}</b>`
+      : `${list.length} runner${list.length === 1 ? '' : 's'}`;
+    results.classList.add('on');
+    overlay.classList.remove('on');
     vitals.classList.remove('on');
     lobby.classList.remove('on');
     spectateBanner.classList.remove('on');
@@ -278,8 +396,9 @@ export function createHud() {
     vitals.classList.remove('on');
   }
 
-  function update({ energy, time, score, players, lives }) {
+  function update({ energy, time, score, players, lives, exhausted = false }) {
     energyFill.style.width = `${Math.round(clamp01(energy) * 100)}%`;
+    energyFill.classList.toggle('exhausted', !!exhausted);
     energyFill.classList.toggle('low', energy < 0.28);
     timeEl.textContent = formatTime(time);
     scoreEl.textContent = String(Math.floor(score));
@@ -305,7 +424,15 @@ export function createHud() {
     toastTimer = setTimeout(() => toast.classList.remove('on'), 1600);
   }
 
-  function setHint(html) { hint.innerHTML = html; }
+  let hintTimer = 0;
+  function setHint(html) {
+    if (hint.innerHTML === html) return;
+    hint.innerHTML = html;
+    hint.classList.remove('fade');
+    // on phones the hint sits by the stick — fade it once it's been read
+    clearTimeout(hintTimer);
+    if (root.classList.contains('is-mobile')) hintTimer = setTimeout(() => hint.classList.add('fade'), 6000);
+  }
   function setNetStatus(text) {
     if (netStatus) netStatus.textContent = text || '';
   }
@@ -328,6 +455,10 @@ export function createHud() {
     set onStart(fn) { onStart = fn; },
     set onMuteToggle(fn) { onMuteToggle = fn; },
     set onReady(fn) { onReady = fn; },
+    set onPlayAgain(fn) { onPlayAgain = fn; },
+    /** Countdown line under the leaderboard (next round start). */
+    setResultsCountdown(text) { resultsClock.textContent = text; },
+    get resultsOpen() { return results.classList.contains('on'); },
     setMobile,
     showStart,
     showPlaying,
@@ -338,6 +469,9 @@ export function createHud() {
     hideSpectate,
     showDead,
     showRoundEnd,
+    requestFullscreen,
+    hideResults,
+    setRoundTimer,
     showFull,
     update,
     pulseHurt,
@@ -365,6 +499,8 @@ function formatTime(s) {
 
 function reasonLabel(r) {
   if (r === 'fell') return 'Fell into a fissure.';
+  if (r === 'car') return 'Run over by a runaway car.';
+  if (r === 'survived') return 'You outlasted the aftershock — all 10 minutes!';
   if (r === 'debris') return 'Hit by falling debris.';
   if (r === 'collapse') return 'Caught in a collapse.';
   return 'The aftershock got you.';
