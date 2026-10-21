@@ -930,6 +930,10 @@ export function createDisaster(world, opts = {}) {
     }
   }
 
+  if (typeof window !== 'undefined') {
+    window.__aftershockSpawnFissure = () => spawnFissure();
+  }
+
   return {
     update, reset, setElapsed, spawnFissure, startCollapse, spawnFallingDrop,
     get elapsed() { return elapsed; },
