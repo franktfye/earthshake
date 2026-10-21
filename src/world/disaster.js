@@ -106,7 +106,6 @@ export function createDisaster(world, opts = {}) {
     }
     if (typeof window !== 'undefined') {
       window.__aftershockHoles = { count: list.length, tiles: tiles.length, hidden };
-      window.__aftershockSpawnFissure = () => spawnFissure();
     }
   }
   // Falling-object warning: dark ground SHADOW (required), optional thin danger ring
@@ -405,20 +404,19 @@ export function createDisaster(world, opts = {}) {
   }
 
   /**
-   * Organic bowl: outline rings at depths → continuous open funnel (walls only).
-   * Upper rings stay near full radius so third-person sees vertical cliff faces.
+   * Organic crater walls: outline rings stay near full radius for ~full depth
+   * so third-person sees a steep cliff, then a slight taper to a wide floor.
    */
   function makeOrganicBowl(pts, mat) {
     const rings = [
       { s: 1.08, y: 0.22 },
-      { s: 1.0, y: 0.04 },
-      { s: 0.97, y: -0.35 },
-      { s: 0.94, y: -1.1 },
-      { s: 0.88, y: -2.0 },
-      { s: 0.72, y: -2.9 },
-      { s: 0.5, y: -3.7 },
-      { s: 0.28, y: -4.3 },
-      { s: 0.02, y: -4.45 },
+      { s: 1.0, y: 0.02 },
+      { s: 0.98, y: -0.5 },
+      { s: 0.96, y: -1.4 },
+      { s: 0.94, y: -2.3 },
+      { s: 0.9, y: -3.2 },
+      { s: 0.86, y: -4.0 },
+      { s: 0.82, y: -4.45 },
     ];
     const n = pts.length;
     const positions = [];
@@ -450,9 +448,9 @@ export function createDisaster(world, opts = {}) {
   }
 
   /**
-   * Real recessed crater/shaft — NOT stacked discs / flat stamps.
-   * Road tiles are removed under the footprint; third-person looks into
-   * steep black walls + a single deep floor. Concrete ledges cling to walls only.
+   * Recessed crater/shaft you look into — steep black walls + one deep floor.
+   * No mid-depth lids (those read as flat stamps). Floor is nearly full-width
+   * at depth so clear/fog never shows through as grey “asphalt”.
    */
   function makeFissureVisual(outline, x, z) {
     const g = new THREE.Group();
@@ -460,57 +458,45 @@ export function createDisaster(world, opts = {}) {
     g.name = 'fissure';
     const { pts, kind, baseR } = outline;
     const segs = 64;
-    const DEPTH = 4.4;
+    const DEPTH = 4.5;
 
     if (kind === 'circle') {
-      // Profile: raised lip → nearly vertical shaft (~2m) → taper → black floor
-      // Upper section keeps radius so the FAR wall is a tall cliff from 3rd-person.
+      // Lip flare at grade, then near-vertical shaft — far wall = tall cliff in 3rd-person
       const profile = [
-        new THREE.Vector2(baseR + 0.42, 0.32),
-        new THREE.Vector2(baseR * 1.05, 0.14),
-        new THREE.Vector2(baseR * 0.99, 0.02),
-        new THREE.Vector2(baseR * 0.96, -0.4),
-        new THREE.Vector2(baseR * 0.93, -1.2),
-        new THREE.Vector2(baseR * 0.9, -2.15),
-        new THREE.Vector2(baseR * 0.72, -3.05),
-        new THREE.Vector2(baseR * 0.48, -3.85),
-        new THREE.Vector2(baseR * 0.28, -DEPTH),
-        new THREE.Vector2(0.02, -DEPTH - 0.08),
+        new THREE.Vector2(baseR + 0.45, 0.34),
+        new THREE.Vector2(baseR * 1.06, 0.14),
+        new THREE.Vector2(baseR * 1.0, 0.01),
+        new THREE.Vector2(baseR * 0.98, -0.6),
+        new THREE.Vector2(baseR * 0.96, -1.6),
+        new THREE.Vector2(baseR * 0.93, -2.7),
+        new THREE.Vector2(baseR * 0.9, -3.7),
+        new THREE.Vector2(baseR * 0.87, -DEPTH),
+        new THREE.Vector2(0.02, -DEPTH - 0.02),
       ];
-      const funnel = new THREE.Mesh(new THREE.LatheGeometry(profile, segs), shaftMat);
-      g.add(funnel);
+      g.add(new THREE.Mesh(new THREE.LatheGeometry(profile, segs), shaftMat));
 
-      // Explicit open cylinder = readable vertical shaft walls around full perimeter
-      const shaftH = 2.4;
+      // Full-depth open cylinder = continuous vertical wall around the perimeter
       const shaft = new THREE.Mesh(
-        new THREE.CylinderGeometry(baseR * 0.96, baseR * 0.9, shaftH, segs, 1, true),
+        new THREE.CylinderGeometry(baseR * 0.97, baseR * 0.88, DEPTH, segs, 1, true),
         shaftMat
       );
-      shaft.position.y = -shaftH * 0.5 - 0.05;
+      shaft.position.y = -DEPTH * 0.5;
       g.add(shaft);
 
-      // Deeper tapered well (still open — no mid-depth lids)
-      const well = new THREE.Mesh(
-        new THREE.CylinderGeometry(baseR * 0.88, baseR * 0.32, 2.2, segs, 1, true),
-        shaftMat
-      );
-      well.position.y = -3.2;
-      g.add(well);
-
-      // ONE black floor at the bottom only (not a stack of lids)
+      // ONE wide black floor at the bottom (plugs clear-through; still meters down)
       const floor = new THREE.Mesh(
-        new THREE.CircleGeometry(baseR * 0.32, segs),
+        new THREE.CircleGeometry(baseR * 0.9, segs),
         voidMat
       );
       floor.rotation.x = -Math.PI / 2;
-      floor.position.y = -DEPTH - 0.05;
+      floor.position.y = -DEPTH;
       g.add(floor);
 
-      // Concrete ledges ON the wall (thin tori — do not fill the opening)
+      // Concrete ledges ON the wall only (thin tori — opening stays hollow)
       for (const [ry, yy, tube] of [
-        [0.94, -0.55, 0.07],
-        [0.91, -1.35, 0.065],
-        [0.78, -2.45, 0.06],
+        [0.96, -0.7, 0.08],
+        [0.93, -1.9, 0.07],
+        [0.9, -3.2, 0.065],
       ]) {
         const ledge = new THREE.Mesh(
           new THREE.TorusGeometry(baseR * ry, tube, 8, segs),
@@ -521,15 +507,13 @@ export function createDisaster(world, opts = {}) {
         g.add(ledge);
       }
     } else {
-      // Organic: open bowl + steep shaft walls + single deep floor (no filled lids)
+      // Organic: steep bowl walls + full-depth shaft + wide deep floor
       g.add(makeOrganicBowl(pts, shaftMat));
-      addSmoothShaft(g, pts, 0.97, 2.6, shaftMat, -1.35);
-      addSmoothShaft(g, pts, 0.9, 2.2, shaftMat, -3.0);
-      g.add(extrudedDisc(pts, 0.28, 0.18, voidMat, -DEPTH));
-      // Concrete chips on the wall only — keep the crater open
-      addWallLedge(g, pts, 0.95, -0.55, lipMat);
-      addWallLedge(g, pts, 0.91, -1.4, lipMat);
-      addWallLedge(g, pts, 0.78, -2.5, lipMat);
+      addSmoothShaft(g, pts, 0.97, DEPTH, shaftMat, -DEPTH * 0.5);
+      g.add(extrudedDisc(pts, 0.85, 0.2, voidMat, -DEPTH));
+      addWallLedge(g, pts, 0.96, -0.7, lipMat);
+      addWallLedge(g, pts, 0.93, -1.9, lipMat);
+      addWallLedge(g, pts, 0.9, -3.2, lipMat);
     }
 
     g.traverse((o) => {
@@ -565,7 +549,7 @@ export function createDisaster(world, opts = {}) {
       kind: outline.kind,
       pts: outline.pts,
       punchR,
-      bottom: -4.2,
+      bottom: -4.3,
       spawnedAt: elapsed,
       expiresAt: elapsed + HOLE_LIFETIME,
       w: outline.maxX - outline.minX,
