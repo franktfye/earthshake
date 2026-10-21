@@ -13,7 +13,18 @@
     color: #2e2a28;
     touch-action: none;
   }
-  #view { display: block; width: 100vw; height: 100vh; touch-action: none; }
+  #view, #splat-view {
+    position: fixed; inset: 0;
+    display: block; width: 100vw; height: 100vh;
+    touch-action: none;
+  }
+  #view { z-index: 1; }
+  /* Pinoc Gaussian splat overlay (transparent; synced camera) */
+  #splat-view {
+    z-index: 2;
+    pointer-events: none;
+    background: transparent;
+  }
 
   .hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
 
@@ -311,6 +322,7 @@
 </head>
 <body>
   <canvas id="view"></canvas>
+  <canvas id="splat-view"></canvas>
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>

@@ -10,10 +10,14 @@ import { buildWorld, WORLD_SEED } from './world/index.js';
 import { createNetClient } from './net/client.js';
 import { createRemoteManager } from './net/remotes.js';
 import { createBgm } from './core/bgm.js';
+import { initPinocLayer } from './world/pinocLayer.js';
 
 const HS_KEY = 'aftershock-best';
 
 const canvas = document.getElementById('view');
+const splatCanvas = document.getElementById('splat-view');
+/** @type {null | Awaited<ReturnType<typeof initPinocLayer>>} */
+let pinoc = null;
 
 const renderer = new THREE.WebGLRenderer({
   canvas,
@@ -361,9 +365,40 @@ function resize() {
   pipeline.setSize(w, h);
   setOutlineResolution(pipeline.size.x, pipeline.size.y);
   remotes.resize(w, h);
+  splatCanvas.width = w;
+  splatCanvas.height = h;
+  pinoc?.resize();
 }
 window.addEventListener('resize', resize);
 resize();
+
+/** Swap procedural local avatar for Pinoc .vsplat once the splat layer is ready. */
+async function bootPinoc() {
+  if (!splatCanvas) {
+    console.warn('[Aftershock] #splat-view missing — Pinoc disabled');
+    return;
+  }
+  try {
+    pinoc = await initPinocLayer(splatCanvas);
+    const avatar = await pinoc.createAvatar({
+      lod: controls.mobile ? 'performance' : 'high',
+    });
+    const old = player.character;
+    if (player.footRing) avatar.root.add(player.footRing);
+    const parent = old.root.parent || scene;
+    parent.remove(old.root);
+    parent.add(avatar.root);
+    player.character = avatar;
+    remotes.setLocalRoot(avatar.root);
+    remotes.setPinocFactory((opts) => pinoc.createAvatar(opts));
+    pinoc.syncCamera(camera);
+    console.info('[Aftershock] Pinoc splat avatar ready');
+  } catch (err) {
+    console.warn('[Aftershock] Pinoc avatar failed; keeping procedural human', err);
+    window.__aftershockPinoc = { ready: false, error: String(err?.message || err) };
+  }
+}
+bootPinoc();
 
 window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyO') pipeline.enabled.ink = !pipeline.enabled.ink;
@@ -460,6 +495,7 @@ function frame() {
   }
 
   pipeline.render();
+  pinoc?.syncCamera(camera);
   remotes.render();
 }
 frame();

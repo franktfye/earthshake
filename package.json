@@ -18,6 +18,8 @@
     "play": "node scripts/workspace.mjs build && node scripts/workspace.mjs preview"
   },
   "dependencies": {
+    "@viggle/splat-engine": "^0.2.0",
+    "playcanvas": "^2.18.0",
     "three": "^0.180.0",
     "ws": "^8.18.0"
   },

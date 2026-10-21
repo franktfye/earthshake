@@ -3,7 +3,8 @@ import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer
 import { createCharacter } from '../world/character.js';
 
 /**
- * Remote players: same stylized human + exactly one name label above each head.
+ * Remote players: Pinoc splat avatar when available, else procedural human.
+ * Exactly one name label above each head.
  * CSS2D DOM nodes are removed on detach so clear/rejoin never stacks duplicates.
  */
 export function createRemoteManager(scene, camera) {
@@ -19,6 +20,8 @@ export function createRemoteManager(scene, camera) {
   document.body.appendChild(labelRenderer.domElement);
 
   let localRoot = null; // Player character root — self nametag parents here
+  /** @type {null | ((opts?: object) => Promise<object>)} */
+  let pinocCreate = null;
 
   function detachLabel(label) {
     if (!label) return;
@@ -107,6 +110,35 @@ export function createRemoteManager(scene, camera) {
       target: { ...player },
       isSelf: false,
     });
+    // Upgrade to Pinoc performance splat when the layer is ready
+    if (pinocCreate) upgradeRemoteToPinoc(player.id);
+  }
+
+  async function upgradeRemoteToPinoc(id) {
+    const r = remotes.get(id);
+    if (!r || r.isSelf || !pinocCreate || r.char?.pinoc) return;
+    try {
+      const avatar = await pinocCreate({ lod: 'performance' });
+      if (!remotes.has(id)) {
+        avatar.destroy?.();
+        return;
+      }
+      const cur = remotes.get(id);
+      if (!cur || cur.isSelf || cur.char?.pinoc) {
+        avatar.destroy?.();
+        return;
+      }
+      const label = cur.label;
+      detachLabel(label);
+      scene.remove(cur.char.root);
+      scene.add(avatar.root);
+      avatar.root.add(label);
+      avatar.root.position.copy(cur.char.root.position);
+      cur.char = avatar;
+      cur.anchor = avatar.root;
+    } catch (err) {
+      console.warn('[Aftershock] remote Pinoc upgrade failed', err);
+    }
   }
 
   function update(player) {
@@ -138,6 +170,13 @@ export function createRemoteManager(scene, camera) {
       if (id === myId) continue;
       if (!seen.has(id)) remove(id);
     }
+  }
+
+  /** Prefer Pinoc splat avatars for new remotes (and upgrade existing). */
+  function setPinocFactory(fn) {
+    pinocCreate = fn || null;
+    if (!pinocCreate) return;
+    for (const id of remotes.keys()) upgradeRemoteToPinoc(id);
   }
 
   /** Bind local avatar so the self nametag sits on the real character (one label). */
@@ -217,7 +256,7 @@ export function createRemoteManager(scene, camera) {
   }
 
   return {
-    add, remove, applyStates, setSelfPose, setLocalRoot,
+    add, remove, applyStates, setSelfPose, setLocalRoot, setPinocFactory,
     tick, render, resize, clear, remotes,
   };
 }

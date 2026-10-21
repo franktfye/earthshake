@@ -115,6 +115,7 @@ export class Player {
     this.hitFlash = 1;
     this.addShake(opts.shake ?? 0.85);
     this.invuln = opts.invuln ?? 1.75;
+    this.character.playHit?.();
 
     // Knock away from hazard or opposite travel
     const kx = opts.kx ?? (-Math.sign(this.vel.x || 1) * 4.5);
