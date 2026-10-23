@@ -289,8 +289,22 @@ export function buildStreetProps(ctx) {
   const avoid = [];
   ctx.looseProps = looseProps;
   ctx.avoid = avoid;
+  /**
+   * Keep the sidewalk in front of every back-lane entrance clear, so a lane
+   * mouth is never plugged by bikes / bins / a vending machine.
+   */
+  const MOUTH = 1.6;
+  const inLaneMouth = (x, z, hx = 0.3, hz = 0.3) => (ctx.lanes || []).some(({ rect: L, alongX: ax }) => {
+    const x0 = L.x0 - (ax ? MOUTH : 0.4);
+    const x1 = L.x1 + (ax ? MOUTH : 0.4);
+    const z0 = L.z0 - (ax ? 0.4 : MOUTH);
+    const z1 = L.z1 + (ax ? 0.4 : MOUTH);
+    return x + hx > x0 && x - hx < x1 && z + hz > z0 && z - hz < z1;
+  });
+
   /** Street clutter: solid (bins, planters… block you) but can tumble into fissures. */
   const loose = (obj, x, z, hx = 0.3, hz = 0.3, top = 0.9) => {
+    if (inLaneMouth(x, z, hx, hz)) return;
     ctx.add(obj);
     const lp = { obj, x, z, loose: true };
     ctx.collide(x - hx, z - hz, x + hx, z + hz, (obj.position.y || 0) + top, undefined, lp);
@@ -298,6 +312,9 @@ export function buildStreetProps(ctx) {
   };
   const H = MAP.half;
   const wireRuns = new Map();
+  /** Parked cars per road: { t (along), halfL, side } — keeps streets passable. */
+  const parked = new Map();
+  const CAR_GAP = 1.5;
 
   ctx.sidewalks.forEach((sw, si) => {
     const { road, side, a, b, inner, outer } = sw;
@@ -318,6 +335,7 @@ export function buildStreetProps(ctx) {
       if (!wireRuns.has(key)) wireRuns.set(key, []);
       for (let t = a + 2; t <= b - 2; t += 7) {
         const p = at(t, curbC);
+        if (inLaneMouth(p.x, p.z, 0.25, 0.25)) continue;
         const pole = makePole(p);
         ctx.add(pole);
         ctx.collide(p.x - 0.2, p.z - 0.2, p.x + 0.2, p.z + 0.2, 8);
@@ -351,9 +369,9 @@ export function buildStreetProps(ctx) {
     }
 
     // A vending machine against the frontage on some segments
-    if (len > 9 && si % 3 === 0) {
-      const t = a + len * 0.62;
-      const p = at(t, outer - side * 0.11);
+    const vendAt = at(a + len * 0.62, outer - side * 0.11);
+    if (len > 9 && si % 3 === 0 && !inLaneMouth(vendAt.x, vendAt.z, 0.6, 0.6)) {
+      const p = vendAt;
       ctx.add(makeVending({ ...p, ry: faceRoad }));
       const hw = alongX ? 0.5 : 0.4;
       const hd = alongX ? 0.4 : 0.5;
@@ -361,21 +379,35 @@ export function buildStreetProps(ctx) {
     }
 
     // Post box + sign on longer runs
-    if (len > 14 && si % 4 === 1) {
-      const p = at(a + len * 0.3, wallC);
+    const postAt = at(a + len * 0.3, wallC);
+    if (len > 14 && si % 4 === 1 && !inLaneMouth(postAt.x, postAt.z, 0.4, 0.4)) {
+      const p = postAt;
       ctx.add(makePostBox({ ...p }));
       ctx.collide(p.x - 0.3, p.z - 0.25, p.x + 0.3, p.z + 0.25, 1.3);
       const q = at(a + len * 0.3 + 2.2, curbC);
       loose(makeSignPost({ ...q, ry: faceRoad }), q.x, q.z, 0.08, 0.08, 2.6);
     }
 
-    // Parked vehicles hugging the kerb — kei trucks, sedans, vans
-    const spots = len > 26 ? [0.3, 0.72] : len > 12 ? [0.45] : [];
-    spots.forEach((f, j) => {
-      const t = a + len * f;
+    // Parked vehicles hugging the kerb — kei trucks, sedans, vans. Sides are
+    // staggered, and a car is never parked level with one on the opposite
+    // kerb: a facing pair would leave ~0.2 m and wall the street off.
+    const key = `${road.axis}${road.c}`;
+    if (!parked.has(key)) parked.set(key, []);
+    const onRoad = parked.get(key);
+    const fracs = side > 0
+      ? (len > 26 ? [0.25, 0.68] : len > 12 ? [0.35] : [])
+      : (len > 26 ? [0.46, 0.9] : len > 12 ? [0.68] : []);
+    fracs.forEach((f, j) => {
+      const kind = (si + j) % 3;
+      const halfL = kind === 2 ? 1.95 : 1.8;
+      const clear = (t) => t - halfL > a + 1.5 && t + halfL < b - 1.5
+        && !onRoad.some((o) => Math.abs(o.t - t) < o.halfL + halfL + (o.side === side ? 0.6 : CAR_GAP));
+      const base = a + len * f;
+      const t = [0, 3, -3, 6, -6].map((d) => base + d).find(clear);
+      if (t === undefined) return; // no room without blocking the street
+      onRoad.push({ t, halfL, side });
       const p = at(t, inner - side * 0.95, ROAD_TOP);
       const ry = alongX ? (side > 0 ? 0.03 : Math.PI - 0.03) : (side > 0 ? Math.PI / 2 : -Math.PI / 2);
-      const kind = (si + j) % 3;
       const colors = [PAL.taxiYellow, PAL.teal, PAL.orange, PAL.blue, PAL.red, PAL.wallWhite];
       const veh = kind === 0
         ? makeKeiTruck({ ...p, ry, hero: si % 8 === 0, color: colors[si % 4], load: si % 3 ? undefined : 'empty' })
@@ -383,7 +415,6 @@ export function buildStreetProps(ctx) {
           ? makeSedan({ ...p, ry, color: colors[(si + 2) % colors.length] })
           : makeVan({ ...p, ry, stripe: colors[(si + 1) % 4] });
       ctx.add(veh);
-      const halfL = kind === 2 ? 1.95 : 1.8;
       const halfW = 0.85;
       const hx = alongX ? halfL : halfW;
       const hz = alongX ? halfW : halfL;

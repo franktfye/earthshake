@@ -247,6 +247,7 @@ export function addLane(ctx, rect, alongX) {
   }
   ctx.platform({ ...rect, top: LANE_TOP });
   ctx.openRects.push(rect);
+  (ctx.lanes ||= []).push({ rect, alongX });
 }
 
 /**
