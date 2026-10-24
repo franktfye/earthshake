@@ -26,6 +26,8 @@ import {
  * Fissures stay open 60 s (shared room clock) then close. Fallen objects and
  * collapse rubble settle and stay solid for 35 s; their landing spots are
  * computed analytically at event time so every client agrees on them.
+ * Collapsing houses hit everyone inside a blast radius (red ring during the
+ * telegraph); runaway cars hit anything they sweep over along the lane.
  */
 
 const WARN_TELEGRAPH = 1.0;
@@ -46,15 +48,18 @@ const STALE = 1.2;
 const RUBBLE_TOP = 0.42;
 const RUBBLE_WEIGHT = 3;
 /** Fallen objects / settled rubble stay on the street (and stay solid) this long. */
-const OBJECT_LIFE = 35;
+const OBJECT_LIFE = 90;
 /** Max objects lying in / falling onto one zone at once (keeps streets passable). */
-const ZONE_OBJECT_CAP_MIN = 16;
-const ZONE_OBJECT_CAP_MAX = 52;
+const ZONE_OBJECT_CAP_MIN = 24;
+const ZONE_OBJECT_CAP_MAX = 80;
 const GRAVITY = 14;
 /** Runaway car: honk + lane warning, then it tears down the street. */
 const CAR_TELEGRAPH = 1.2;
 const CAR_HALF_L = 1.8;
 const CAR_HALF_W = 0.8;
+/** Extra danger width either side of a runaway car (matches the red lane stripe). */
+const CAR_HIT_PAD = 0.55;
+const CAR_CRASH_R = 2.2;
 
 function hash(a, b) {
   let h = (a ^ Math.imul(b + 0x9e3779b9, 0x85ebca6b)) >>> 0;
@@ -320,7 +325,9 @@ export function createDisaster(world, opts = {}) {
     const b = living[z.rng.int(0, living.length - 1)];
     b.pending = true;
     b.pendingAt = t;
-    b.telegraph = Math.max(0.8, 1.3 - difficulty(t) * 0.55);
+    b.telegraph = Math.max(1.1, 1.5 - difficulty(t) * 0.3);
+    // Blast reaches this far beyond the footprint: ~2.7 m (1 floor) → ~5.3 m (3 floors)
+    b.blastReach = Math.min(5.5, 1.5 + b.height * 0.45);
     b.baseRotX = b.group.rotation.x;
     b.baseRotZ = b.group.rotation.z;
     b.collapseSeed = hash(seed, 5000 + world.buildings.indexOf(b));
@@ -951,9 +958,60 @@ export function createDisaster(world, opts = {}) {
       life: 0.85,
       kind: 'collapse',
     });
+    // Blast: everyone inside the telegraphed radius is hit and thrown outward
+    world.collapseZones.push({
+      kind: 'blastRect', x0: fp.x0, x1: fp.x1, z0: fp.z0, z1: fp.z1, cx, cz,
+      r: b.blastReach || 3, life: 0.3, reason: 'collapse',
+    });
     world.juice?.burstDust(cx, b.height * 0.4, cz, 28, 1.6);
     world.juice?.impactRing(cx, cz, PAL.red);
     notify(cx, cz, null, 0.85);
+  }
+
+  /** Rounded rectangle (footprint grown by `r`) as a THREE.Shape in local x / -z. */
+  function roundedRect(hw, hd, r, shape = new THREE.Shape()) {
+    const x0 = -hw - r, x1 = hw + r, y0 = -hd - r, y1 = hd + r;
+    shape.moveTo(x0 + r, y0);
+    shape.lineTo(x1 - r, y0);
+    shape.absarc(x1 - r, y0 + r, r, -Math.PI / 2, 0, false);
+    shape.lineTo(x1, y1 - r);
+    shape.absarc(x1 - r, y1 - r, r, 0, Math.PI / 2, false);
+    shape.lineTo(x0 + r, y1);
+    shape.absarc(x0 + r, y1 - r, r, Math.PI / 2, Math.PI, false);
+    shape.lineTo(x0, y0 + r);
+    shape.absarc(x0 + r, y0 + r, r, Math.PI, Math.PI * 1.5, false);
+    return shape;
+  }
+
+  /** Red zone around the house: the collapse hits everyone inside it. */
+  function buildBlastWarn(b) {
+    const fp = b.footprint;
+    const cx = (fp.x0 + fp.x1) / 2;
+    const cz = (fp.z0 + fp.z1) / 2;
+    const hw = (fp.x1 - fp.x0) / 2;
+    const hd = (fp.z1 - fp.z0) / 2;
+    const R = b.blastReach || 3;
+    const g = new THREE.Group();
+    g.position.set(cx, 0.17, cz);
+    const flat = (geo) => { geo.rotateX(-Math.PI / 2); return geo; };
+    const fill = new THREE.Mesh(flat(new THREE.ShapeGeometry(roundedRect(hw, hd, R), 6)), decal(PAL.danger, 0.1));
+    const band = (w) => {
+      const sh = roundedRect(hw, hd, R);
+      sh.holes.push(roundedRect(hw, hd, R - w));
+      return flat(new THREE.ShapeGeometry(sh, 6));
+    };
+    const edge = new THREE.Mesh(band(0.22), decal(PAL.danger, 0.8));
+    // closing ring: starts well outside and shrinks onto the edge at collapse
+    const closing = new THREE.Mesh(band(0.18), decal(PAL.danger, 0.55));
+    for (const m of [fill, edge, closing]) {
+      m.renderOrder = 4;
+      g.add(m);
+    }
+    edge.position.y = 0.004;
+    closing.position.y = 0.006;
+    g.userData = { fill, edge, closing };
+    world.add(g);
+    return g;
   }
 
   /* ---------------- frame update ---------------- */
@@ -974,10 +1032,21 @@ export function createDisaster(world, opts = {}) {
       if (!b.pending || b.collapsed) continue;
       const age = elapsed - b.pendingAt;
       if (age >= b.telegraph) {
+        disposeGroup(b.blastWarn);
+        b.blastWarn = null;
         collapseBuilding(b, age - b.telegraph > STALE);
         continue;
       }
       if (age < 0) continue;
+      if (!b.blastWarn) b.blastWarn = buildBlastWarn(b);
+      {
+        const u = Math.min(1, age / b.telegraph);
+        const ud = b.blastWarn.userData;
+        ud.fill.material.opacity = 0.08 + 0.22 * u;
+        ud.edge.material.opacity = 0.5 + 0.4 * Math.sin(elapsed * 16);
+        const k = 1.35 - 0.35 * u; // closing ring lands on the blast edge at collapse
+        ud.closing.scale.set(k, 1, k);
+      }
       if (!b.creaked && age < b.telegraph * 0.8) {
         b.creaked = true;
         const fp = b.footprint;
@@ -1170,7 +1239,7 @@ export function createDisaster(world, opts = {}) {
   function buildCarWarn(c) {
     const g = new THREE.Group();
     const len = c.travel + CAR_HALF_L * 2;
-    const w = CAR_HALF_W * 2 + 0.3;
+    const w = (CAR_HALF_W + CAR_HIT_PAD) * 2;
     const stripe = new THREE.Mesh(new THREE.PlaneGeometry(len, w), decal(PAL.danger, 0.3));
     stripe.rotation.x = -Math.PI / 2;
     stripe.renderOrder = 3;
@@ -1247,14 +1316,24 @@ export function createDisaster(world, opts = {}) {
       }
       if (c.state === 'drive') {
         const d = Math.min(c.travel, (elapsed - c.goAt) * c.speed);
+        const prevD = c.prevD ?? 0;
+        c.prevD = d;
         const s = c.s0 + c.dir * d;
         const x = c.alongX ? s : c.lateral;
         const z = c.alongX ? c.lateral : s;
         c.mesh.position.set(x, 0.1, z);
+        // fishtail as it slides down the street
+        if (c.baseRy == null) c.baseRy = c.mesh.rotation.y;
+        c.mesh.rotation.y = c.baseRy + Math.sin(elapsed * 9 + c.id) * 0.13;
         if (player?.alive) {
-          const along = c.alongX ? player.pos.x - x : player.pos.z - z;
-          const across = c.alongX ? player.pos.z - z : player.pos.x - x;
-          if (Math.abs(along) < CAR_HALF_L + 0.3 && Math.abs(across) < CAR_HALF_W + 0.35) {
+          // Swept test over everything the car covered since last frame, so a
+          // fast car (or a slow frame) can't skip past you
+          const ps = c.alongX ? player.pos.x : player.pos.z;
+          const across = c.alongX ? player.pos.z - c.lateral : player.pos.x - c.lateral;
+          const sA = c.s0 + c.dir * prevD;
+          const lo = Math.min(sA, s) - CAR_HALF_L - 0.3;
+          const hi = Math.max(sA, s) + CAR_HALF_L + 0.3;
+          if (ps > lo && ps < hi && Math.abs(across) < CAR_HALF_W + CAR_HIT_PAD) {
             const side = Math.sign(across) || 1;
             const fx = c.alongX ? c.dir * 6 : side * 5;
             const fz = c.alongX ? side * 5 : c.dir * 6;
@@ -1273,6 +1352,7 @@ export function createDisaster(world, opts = {}) {
           notify(c.x1, c.z1, null, 0.5);
           sfx('car_crash', c.x1, c.z1, 1);
           addSolid(c, c.x1, c.z1, 0);
+          world.collapseZones.push({ kind: 'blast', cx: c.x1, cz: c.z1, r: CAR_CRASH_R, life: 0.2, reason: 'car' });
         }
       }
       if (c.state === 'wreck' && world.holeAt(c.x1, c.z1)) {
@@ -1348,7 +1428,27 @@ export function createDisaster(world, opts = {}) {
     for (let i = world.collapseZones.length - 1; i >= 0; i--) {
       const z = world.collapseZones[i];
       z.life -= dt;
-      if (player?.alive && pos.x > z.x0 && pos.x < z.x1 && pos.z > z.z0 && pos.z < z.z1) {
+      if (z.kind === 'blastRect') {
+        // distance from the footprint rectangle
+        const qx = Math.max(z.x0, Math.min(z.x1, pos.x));
+        const qz = Math.max(z.z0, Math.min(z.z1, pos.z));
+        const d = Math.hypot(pos.x - qx, pos.z - qz);
+        if (player?.alive && d < z.r) {
+          const dx = pos.x - z.cx;
+          const dz = pos.z - z.cz;
+          const l = Math.hypot(dx, dz) || 1;
+          const push = 7 * (1 - d / z.r) + 3;
+          player.takeHit(z.reason || 'collapse', { kx: (dx / l) * push, kz: (dz / l) * push, shake: 1.2 });
+        }
+      } else if (z.kind === 'blast') {
+        const dx = pos.x - z.cx;
+        const dz = pos.z - z.cz;
+        const d = Math.hypot(dx, dz);
+        if (player?.alive && d < z.r) {
+          const push = 7 * (1 - d / z.r) + 3;
+          player.takeHit(z.reason || 'collapse', { kx: (dx / (d || 1)) * push, kz: (dz / (d || 1)) * push, shake: 1.2 });
+        }
+      } else if (player?.alive && pos.x > z.x0 && pos.x < z.x1 && pos.z > z.z0 && pos.z < z.z1) {
         player.takeHit(z.kind === 'collapse' ? 'collapse' : 'debris', { shake: 1.1 });
       }
       if (z.life <= 0) world.collapseZones.splice(i, 1);
@@ -1360,6 +1460,7 @@ export function createDisaster(world, opts = {}) {
     for (const d of drops) { disposeGroup(d.warn); if (d.mesh) world.root.remove(d.mesh); removeSolid(d); }
     for (const d of debris) { if (d.mesh) world.root.remove(d.mesh); removeSolid(d); }
     for (const c of cars) { disposeGroup(c.warn); if (c.mesh) world.root.remove(c.mesh); removeSolid(c); }
+    for (const b of world.buildings) { disposeGroup(b.blastWarn); b.blastWarn = null; }
     cars.length = 0;
     fissures.length = 0;
     drops.length = 0;

@@ -59,7 +59,8 @@ survivors.
 - Jump: ~0.95 m apex, ~0.7 s airtime, costs 6 % energy — clears bins and
   narrow cracks; you only fall into a fissure if you land in it.
 - Telegraphs (1 s): a closing red target ring + growing shadow for falling
-  objects, the exact red outline for fissures, creaking + shaking for houses,
+  objects, the exact red outline for fissures, creaking + shaking + a red
+  blast zone for houses,
   honk + red lane chevrons (1.2 s) for runaway cars.
 - **Difficulty curve** (`intensity()` in `src/world/disaster.js`, on the
   shared round clock): calm start (intensity 0.4 → ~1.0 at 30 s), ~2.0 at
@@ -72,8 +73,15 @@ survivors.
   fissures cut through them, swallowing the rubble. No safe havens.
 - Fissures: `pit`, `chasm` and narrow `crack`; per-zone cap ramps 4 → 12 (64
   map-wide, packed in a data texture for the ground-cut shader), 60 s each.
-- Fallen objects, collapse rubble and car wrecks stay **solid for 35 s**
-  (per-zone cap ramps 16 → 52); a fissure opening under them swallows them.
+- Fallen objects, collapse rubble and car wrecks stay **solid for 90 s**
+  (per-zone cap ramps 24 → 80); a fissure opening under them swallows them.
+- A collapsing house hits everyone within its **blast reach** beyond the
+  footprint (~2.7 m for 1 floor → ~5.3 m for 3 floors), shown as a red
+  rounded zone with a closing ring during the 1.1–1.5 s telegraph, and
+  throws them outward.
+- Runaway cars hit anything they sweep over along the whole lane (swept test,
+  so fast cars or slow frames can't skip you), fishtail as they slide, and the
+  crash itself hits within 2.2 m.
   Collapses throw more rubble and spill more falling objects as it intensifies.
 - Players, street clutter (bins, planters, bikes, cones), parked cars and
   wrecks are solid.
