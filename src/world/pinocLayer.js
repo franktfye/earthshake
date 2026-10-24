@@ -184,7 +184,7 @@ export async function initPinocLayer(canvas) {
             clip = next;
           }
           // squeeze the ~2 s clip (wind-up → air → landing) into ~0.9 s of hop
-          pc.playbackSpeed = clip === 'runjump' ? 2.1 : 2.3;
+          pc.playbackSpeed = clip === 'runjump' ? 1.7 : 1.85;
           return;
         }
         if (next !== clip) {

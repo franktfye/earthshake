@@ -287,8 +287,22 @@ export function createDisaster(world, opts = {}) {
     // Street already littered: skip ambient drops (collapse spill still lands)
     const objCap = Math.round(ZONE_OBJECT_CAP_MIN + (ZONE_OBJECT_CAP_MAX - ZONE_OBJECT_CAP_MIN) * ramp(t));
     if (!near && dropLog.filter((d) => d.zone === z.idx && t >= d.t0 && t < d.end).length >= objCap) return false;
+    /** Free distance from (x, z) to the nearest crack or object edge at time t. */
+    const clearance = (x, zz, t) => {
+      let c = Infinity;
+      for (const h of activeHoles(t)) c = Math.min(c, Math.hypot(h.x - x, h.z - zz) - h.r);
+      for (const d of dropLog) {
+        if (t < d.t0 - 0.5 || t >= d.end) continue;
+        c = Math.min(c, Math.hypot(d.x - x, d.z - zz) - (d.r ?? 1));
+      }
+      return c;
+    };
     for (let n = 0; n < count; n++) {
-      for (let tries = 0; tries < 10; tries++) {
+      // Sample several valid spots and drop on the emptiest one — objects
+      // never land on cracks or on each other, and spread over open ground.
+      let best = null;
+      let valid = 0;
+      for (let tries = 0; tries < 18 && valid < (near ? 3 : 6); tries++) {
         let p;
         if (near) {
           const out = rng.range(1.4, 4.2);
@@ -301,32 +315,35 @@ export function createDisaster(world, opts = {}) {
           p = sampleSpot(z, t);
         }
         const s = rng.range(0.5, 1.0);
-        const bomb = !near && t > 20 && rng.chance(0.05 + 0.12 * ramp(t));
-        const kind = bomb ? 4 : rng.int(0, 3);
-        const vy = FALL_SPEED * rng.range(0.9, 1.15);
         if (!p) continue;
         if (!isOpen(p.x, p.z, 0.15, t)) continue;
-        if (activeHoles(t).some((h) => Math.hypot(h.x - p.x, h.z - p.z) < h.r + 0.6)) continue;
-        if (dropLog.some((d) => t >= d.t0 - 0.5 && t < d.end && Math.hypot(d.x - p.x, d.z - p.z) < (d.r ?? 1) + s * 0.7 + 0.5)) continue;
-        const fallAt = t + WARN_TELEGRAPH;
-        const surf = surfaceMax(p.x, p.z, s * 0.6, t);
-        const restY = surf + s * 0.36;
-        const landAt = fallAt + (FALL_HEIGHT - restY) / vy;
-        // a hazard drum lies there only until its fuse runs out
-        const explodeAt = bomb ? landAt + BOMB_FUSE : null;
-        dropLog.push({ x: p.x, z: p.z, r: s * 0.7, t0: t, land: landAt + 0.3, end: bomb ? explodeAt : landAt + OBJECT_LIFE, zone: z.idx });
-        if (bomb) blasts.push({ x: p.x, z: p.z, r: BOMB_R, t0: landAt, at: explodeAt, kind: 'drum', y: surf });
-        drops.push({
-          x: p.x, z: p.z, s, kind, vy, surf, restY,
-          endAt: bomb ? explodeAt : null,
-          radius: s * 0.85,
-          t0: t, fallAt, landAt,
-          state: 'wait', warn: null, mesh: null,
-          seed: hash(seed, 9000 + (++dropSeq)),
-        });
-        spawned += 1;
-        break;
+        const c = clearance(p.x, p.z, t) - s * 0.7;
+        if (c < 0.6) continue;
+        valid += 1;
+        if (!best || c > best.c) best = { p, s, c };
       }
+      if (!best) continue;
+      const { p, s } = best;
+      const bomb = !near && t > 20 && rng.chance(0.05 + 0.12 * ramp(t));
+      const kind = bomb ? 4 : rng.int(0, 3);
+      const vy = FALL_SPEED * rng.range(0.9, 1.15);
+      const fallAt = t + WARN_TELEGRAPH;
+      const surf = surfaceMax(p.x, p.z, s * 0.6, t);
+      const restY = surf + s * 0.36;
+      const landAt = fallAt + (FALL_HEIGHT - restY) / vy;
+      // a hazard drum lies there only until its fuse runs out
+      const explodeAt = bomb ? landAt + BOMB_FUSE : null;
+      dropLog.push({ x: p.x, z: p.z, r: s * 0.7, t0: t, land: landAt + 0.3, end: bomb ? explodeAt : landAt + OBJECT_LIFE, zone: z.idx, type: 'drop' });
+      if (bomb) blasts.push({ x: p.x, z: p.z, r: BOMB_R, t0: landAt, at: explodeAt, kind: 'drum', y: surf });
+      drops.push({
+        x: p.x, z: p.z, s, kind, vy, surf, restY,
+        endAt: bomb ? explodeAt : null,
+        radius: s * 0.85,
+        t0: t, fallAt, landAt,
+        state: 'wait', warn: null, mesh: null,
+        seed: hash(seed, 9000 + (++dropSeq)),
+      });
+      spawned += 1;
     }
     return spawned > 0;
   }
@@ -394,14 +411,18 @@ export function createDisaster(world, opts = {}) {
       const tLand = (v.y + Math.sqrt(v.y * v.y + 2 * GRAVITY * (p0.y - restY))) / GRAVITY;
       const lx = p0.x + v.x * tLand;
       const lz = p0.z + v.z * tLand;
-      const settles = isOpen(lx, lz, 0, T + tLand) && !activeHoles(T + tLand).some((h) => Math.hypot(h.x - lx, h.z - lz) < h.r);
+      const tl = T + tLand;
+      // rubble that would land on a crack or another object shatters instead of settling
+      const settles = isOpen(lx, lz, 0, tl)
+        && !activeHoles(tl).some((h) => Math.hypot(h.x - lx, h.z - lz) < h.r + s * 0.6)
+        && !dropLog.some((d) => tl >= d.t0 - 0.5 && tl < d.end && Math.hypot(d.x - lx, d.z - lz) < (d.r ?? 1) + s * 0.6);
       const c = {
         s, p0, v, tLand, T, lx, lz, restY, settles,
         rot: new THREE.Euler(vr.range(0, 3), vr.range(0, 6), vr.range(0, 3)),
         spin: new THREE.Vector3(vr.range(-4, 4), vr.range(-4, 4), vr.range(-4, 4)),
         mesh: null, collider: null, hitDone: false,
       };
-      if (settles) dropLog.push({ x: lx, z: lz, r: s * 0.6, t0: T, land: T + tLand, end: T + tLand + OBJECT_LIFE });
+      if (settles) dropLog.push({ x: lx, z: lz, r: s * 0.6, t0: T, land: T + tLand, end: T + tLand + OBJECT_LIFE, type: 'chunk' });
       chunks.push(c);
     }
     return chunks;
@@ -463,7 +484,7 @@ export function createDisaster(world, opts = {}) {
       const stopAt = goAt + travel / speed;
       const end = pos(s0 + dir * travel);
       const id = ++carSeq;
-      dropLog.push({ x: end.x, z: end.z, r: CAR_HALF_L, t0: t, land: stopAt, end: stopAt + OBJECT_LIFE, zone: z.idx });
+      dropLog.push({ x: end.x, z: end.z, r: CAR_HALF_L, t0: t, land: stopAt, end: stopAt + OBJECT_LIFE, zone: z.idx, type: 'car' });
       cars.push({
         id, kind, alongX, dir, s0, travel, speed, lateral,
         t0: t, goAt, stopAt, endAt: stopAt + OBJECT_LIFE,
@@ -1308,7 +1329,7 @@ export function createDisaster(world, opts = {}) {
   }
 
   /** Solid AABB for a settled object (drop or rubble chunk). */
-  function addSolid(owner, x, z, half) {
+  function addSolid(owner, x, z, half, top = 1.6) {
     if (owner.alongX !== undefined && !half) {
       const hx = owner.alongX ? CAR_HALF_L : CAR_HALF_W;
       const hz = owner.alongX ? CAR_HALF_W : CAR_HALF_L;
@@ -1316,7 +1337,7 @@ export function createDisaster(world, opts = {}) {
       owner.solid = true;
       return;
     }
-    world.collide(x - half, z - half, x + half, z + half, 1.6, undefined, owner);
+    world.collide(x - half, z - half, x + half, z + half, top, undefined, owner);
     owner.solid = true;
   }
 
@@ -1358,7 +1379,7 @@ export function createDisaster(world, opts = {}) {
           d.mesh.position.set(d.x, d.restY, d.z);
           d.mesh.rotation.set(0, d.mesh.rotation.y, 0);
           d.state = 'landed';
-          addSolid(d, d.x, d.z, d.s * 0.55);
+          addSolid(d, d.x, d.z, d.s * 0.55, d.restY + d.s * 0.42);
           continue;
         }
         d.warn = buildDropWarn(d);
@@ -1403,7 +1424,7 @@ export function createDisaster(world, opts = {}) {
           notify(d.x, d.z, null, 0.4);
           sfx(IMPACT_SFX[d.kind] || 'impact_concrete', d.x, d.z, 1);
           if (d.warn) { disposeGroup(d.warn); d.warn = null; }
-          addSolid(d, d.x, d.z, d.s * 0.55);
+          addSolid(d, d.x, d.z, d.s * 0.55, d.restY + d.s * 0.42);
         }
       }
       if (d.state === 'landed' && d.mesh) {
@@ -1718,7 +1739,7 @@ export function createDisaster(world, opts = {}) {
         c.landed = true;
         c.mesh.position.set(c.lx, c.restY, c.lz);
         c.mesh.rotation.set(0, c.rot.y, 0);
-        if (c.s > 0.42) addSolid(c, c.lx, c.lz, c.s * 0.45);
+        if (c.s > 0.42) addSolid(c, c.lx, c.lz, c.s * 0.45, c.restY + c.s * 0.35);
       } else {
         if (world.holeAt(c.lx, c.lz)) {
           c.mesh.position.y -= 9 * dt;
@@ -1851,7 +1872,8 @@ export function createDisaster(world, opts = {}) {
     get debugSpots() {
       return {
         holes: holeLog.map((h) => [h.x, h.z, h.t0]),
-        drops: dropLog.map((d) => [d.x, d.z, d.t0]),
+        drops: dropLog.map((d) => [d.x, d.z, d.t0, d.end, d.r ?? 1, d.land ?? d.t0, d.type]),
+        holeSpans: holeLog.map((h) => [h.x, h.z, h.t0, h.expiresAt, h.r]),
         rubble: rubbleLog.map((r) => [r.x0, r.x1, r.z0, r.z1, r.T]),
       };
     },

@@ -443,6 +443,16 @@
     color: #f4ece0; font-weight: 800; font-size: 12px; letter-spacing: .06em;
   }
   .jump-btn.on { background: rgba(40, 80, 170, 0.95); transform: scale(0.94); }
+  /* cooldown: dark sweep that drains clockwise over 2 s */
+  .jump-btn { background-image: conic-gradient(rgba(20, 18, 30, 0.6) calc(var(--cd, 0) * 360deg), transparent 0); }
+  .jump-btn.cooling { color: rgba(244, 236, 224, 0.55); }
+  .jump-chip {
+    margin-left: 6px; padding: 2px 7px; border-radius: 6px;
+    font: 800 11px/1.3 inherit; color: #fff; background: #3d6ec4;
+    background-image: linear-gradient(90deg, rgba(20,18,30,.55) calc(var(--cd, 0) * 100%), transparent 0);
+  }
+  .jump-chip.cooling { color: rgba(255,255,255,.6); }
+  .is-mobile .jump-chip { display: none; }
 </style>
 </head>
 <body>

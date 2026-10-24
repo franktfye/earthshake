@@ -808,7 +808,7 @@ function frame() {
     hud.update({
       energy: player.energy, time: survived, score,
       players: playerCount, lives: player.lives, exhausted: player.exhausted,
-      shindo: world.disaster?.shindo,
+      shindo: world.disaster?.shindo, jumpCd: player.jumpCd,
     });
 
     net.sendState({

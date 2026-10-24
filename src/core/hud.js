@@ -53,6 +53,7 @@ export function createHud() {
       <span class="heart on" data-i="1"></span>
       <span class="heart on" data-i="2"></span>
       <span class="shindo" title="Quake intensity (shindo)">震度 1</span>
+      <span class="jump-chip" title="Jump (Space) — 2 s cooldown">JUMP</span>
     </div>
     <div class="vital-row">
       <span class="vital-label">ENERGY</span>
@@ -399,7 +400,16 @@ export function createHud() {
 
   const shindoEl = vitals.querySelector('.shindo');
   let lastShindo = 0;
-  function update({ energy, time, score, players, lives, exhausted = false, shindo = 0 }) {
+  const jumpChip = vitals.querySelector('.jump-chip');
+  function update({ energy, time, score, players, lives, exhausted = false, shindo = 0, jumpCd = 0 }) {
+    const cdFrac = Math.min(1, Math.max(0, jumpCd / 2));
+    jumpChip.style.setProperty('--cd', cdFrac.toFixed(3));
+    jumpChip.classList.toggle('cooling', cdFrac > 0);
+    const jb = document.querySelector('.jump-btn');
+    if (jb) {
+      jb.style.setProperty('--cd', cdFrac.toFixed(3));
+      jb.classList.toggle('cooling', cdFrac > 0);
+    }
     if (shindo && shindo !== lastShindo) {
       lastShindo = shindo;
       shindoEl.textContent = `震度 ${shindo}`;

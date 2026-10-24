@@ -7,9 +7,11 @@ const STEP = 0.38;
 const CAM_DIST = 5.2;
 const CAM_HEIGHT = 2.35;
 const CAM_LOOK = 1.15;
-/** Jump launch speed / gravity → ~0.95 m apex, ~0.7 s airtime. */
-const JUMP_V = 5.4;
+/** Jump: ~1.5 m apex, ~0.9 s airtime, forward boost — clears fallen objects. */
+const JUMP_V = 6.7;
 const JUMP_G = 15;
+const JUMP_BOOST = 1.4;
+export const JUMP_COOLDOWN = 2;
 
 /** Third-person walker with stylized human mesh + energy. */
 export class Player {
@@ -132,6 +134,7 @@ export class Player {
     this._fallV = 0;
     this.airborne = false;
     this.vy = 0;
+    this.jumpCd = 0;
     this.shake = 0;
     this.hitFlash = 0;
     this._camReady = false;
@@ -280,10 +283,18 @@ export class Player {
 
     // Jump: real airtime — clears bins/cones and narrow cracks; costs a little energy
     const wantJump = this.controls.consumeJump?.();
-    if (wantJump && !this.airborne && !this._fallV && this.energy >= 0.06) {
+    this.jumpCd = Math.max(0, (this.jumpCd || 0) - dt);
+    if (wantJump && !this.airborne && !this._fallV && this.jumpCd <= 0 && this.energy >= 0.06) {
       this.airborne = true;
       this.vy = JUMP_V;
       this.energy -= 0.06;
+      this.jumpCd = JUMP_COOLDOWN;
+      // carry further: boost along the current heading when moving
+      const sp = Math.hypot(this.vel.x, this.vel.z);
+      if (sp > 0.5) {
+        this.vel.x += (this.vel.x / sp) * JUMP_BOOST;
+        this.vel.z += (this.vel.z / sp) * JUMP_BOOST;
+      }
       this.onJump?.();
     }
 

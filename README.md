@@ -56,8 +56,10 @@ survivors.
 - 3 lives. Hit or fall → red screen flash (~2.5 s) and a life lost.
 - Sprint drains energy; at empty you drop to a walk until you release sprint
   and recover 25 %.
-- Jump: ~0.95 m apex, ~0.7 s airtime, costs 6 % energy — clears bins and
-  narrow cracks; you only fall into a fissure if you land in it.
+- Jump: ~1.5 m apex, ~0.9 s airtime with a forward boost (~2 m walking,
+  ~5 m running), costs 6 % energy, **2 s cooldown** (HUD chip / JUMP button
+  sweep). Clears fallen objects, bins and narrow cracks; you only fall into a
+  fissure if you land in it.
 - Telegraphs (1 s): a closing red target ring + growing shadow for falling
   objects, the exact red outline for fissures, creaking + shaking + a red
   blast zone for houses,
@@ -73,6 +75,8 @@ survivors.
   fissures cut through them, swallowing the rubble. No safe havens.
 - Fissures: `pit`, `chasm` and narrow `crack`; per-zone cap ramps 4 → 12 (64
   map-wide, packed in a data texture for the ground-cut shader), 60 s each.
+- Falling objects pick the emptiest of several candidate spots — never on a
+  crack or another object.
 - Fallen objects, collapse rubble and car wrecks stay **solid for 90 s**
   (per-zone cap ramps 24 → 80); a fissure opening under them swallows them.
 - A collapsing house hits everyone within its **blast reach** beyond the
