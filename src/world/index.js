@@ -283,9 +283,10 @@ function placeBuildings(ctx, buildings) {
   const blocks = [];
   ctx.blocks = blocks;
 
+  // Rows only give way where they would actually overlap the plaza square
   const plazaClip = (lo, hi, crossLo, crossHi) => {
-    if (crossHi < -P - 0.5 || crossLo > P + 0.5) return [[lo, hi]];
-    return subtractIntervals(lo, hi, [[-P - 0.8, P + 0.8]]);
+    if (crossHi <= -P || crossLo >= P) return [[lo, hi]];
+    return subtractIntervals(lo, hi, [[-P - 0.3, P + 0.3]]);
   };
 
   xs.forEach(([bx0, bx1], ix) => {

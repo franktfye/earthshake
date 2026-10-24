@@ -13,8 +13,11 @@ export const FRONT_APRON = 0.25;
 /** Map half-extent — 120 m square, sized for a 30-player room. */
 export const MAP = { half: 60 };
 /** Open civic plaza over the central crossing. */
-/** Small paved square over the central crossing (spawn area — not a safe zone). */
-export const PLAZA = { half: 6, top: 0.12 };
+/**
+ * Paved square = exactly the central boulevard crossing (road + sidewalks).
+ * Houses come right up to its corners: it's a spawn area, not a safe zone.
+ */
+export const PLAZA = { half: 3.6, top: 0.12 };
 
 export const LOT_TOP = 0.06;
 export const ROAD_TOP = 0.1;
@@ -269,7 +272,7 @@ export function spawnPoints() {
   }
   for (let i = 0; i < 6; i++) {
     const a = (i / 6) * Math.PI * 2 + 0.4;
-    pts.push({ x: Math.cos(a) * 3.6, z: Math.sin(a) * 3.6, yaw: Math.atan2(Math.cos(a), Math.sin(a)) });
+    pts.push({ x: Math.cos(a) * 2.6, z: Math.sin(a) * 2.6, yaw: Math.atan2(Math.cos(a), Math.sin(a)) });
   }
   // interleave: plaza first, then one per road quadrant round-robin
   const order = [24, 0, 10, 20, 7, 25, 3, 13, 17, 26, 5, 15, 22, 1, 27, 11, 18, 8, 28, 2, 14, 21, 6, 29, 4, 12, 19, 9, 16, 23];

@@ -97,8 +97,9 @@ survivors.
 ## Map
 
 120 m square town on a 3×3 street grid: two 5.2 m boulevards crossing at a
-small 12 m central plaza with a clock monument (spawn area, not a safe zone —
-houses close in around it and it gets its full share of hazards), four 3.8 m side streets, 1 m sidewalks.
+central plaza that is just the paved boulevard crossing with a clock
+monument (spawn area, not a safe zone — houses come right up to its
+corners and it gets its full share of hazards), four 3.8 m side streets, 1 m sidewalks.
 Every block is split by a walkable 3 m back lane with narrow house rows on
 both the road frontage and the lane (~300 collapsible houses, batched one mesh
 per material per block), parked kei trucks / sedans / vans along the kerbs.
