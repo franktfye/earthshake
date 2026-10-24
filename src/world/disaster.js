@@ -35,17 +35,21 @@ const HOLE_CLOSE = 0.7;
 const PIT_DEPTH = 6.5;
 const FALL_HEIGHT = 14;
 const FALL_SPEED = 22;
-const ZONE_HOLE_CAP = 12;
+/** Per-zone open-fissure cap ramps with intensity: 4 at the start → 12. */
+const ZONE_HOLE_CAP_MIN = 4;
+const ZONE_HOLE_CAP_MAX = 12;
 /** Walkable area of the old single-cross map — hazard density reference. */
 const REF_AREA = 1240;
 const NOTIFY_RADIUS = 28;
 const STALE = 1.2;
-/** Global hazard multiplier: every damage source fires this many times as often. */
-const HAZARD_RATE = 2;
+/** Collapsed houses become walkable rubble heaps that hazards target too. */
+const RUBBLE_TOP = 0.42;
+const RUBBLE_WEIGHT = 3;
 /** Fallen objects / settled rubble stay on the street (and stay solid) this long. */
 const OBJECT_LIFE = 35;
 /** Max objects lying in / falling onto one zone at once (keeps streets passable). */
-const ZONE_OBJECT_CAP = 52;
+const ZONE_OBJECT_CAP_MIN = 16;
+const ZONE_OBJECT_CAP_MAX = 52;
 const GRAVITY = 14;
 /** Runaway car: honk + lane warning, then it tears down the street. */
 const CAR_TELEGRAPH = 1.2;
@@ -104,8 +108,28 @@ export function createDisaster(world, opts = {}) {
   });
 
   /* ---------------- helpers ---------------- */
+  /**
+   * Quake intensity over the shared round clock — calm start, steady build:
+   * 0.4 at 0 s · ~1.0 at 30 s · ~1.4 at 1 min · ~2.0 at 2 min · ~2.8 at 5 min
+   * · ~3.6 at 10 min. Scales hazard frequency, caps and extra rolls.
+   */
+  function intensity(t) {
+    return 0.4 + 2.6 * (1 - Math.exp(-t / 120)) + Math.min(0.6, t / 1000);
+  }
+
+  /** 0 → 1 ramp of the intensity curve (for caps / chances). */
+  function ramp(t) {
+    return Math.min(1, Math.max(0, (intensity(t) - 0.4) / 2.6));
+  }
+
+  /** Hazard mix / secondary-event pressure. */
   function difficulty(t) {
-    return Math.min(1.6, t / 36);
+    return Math.min(1.6, t / 90);
+  }
+
+  /** Japanese seismic intensity (shindo 1–7) for the HUD. */
+  function shindo(t) {
+    return Math.max(1, Math.min(7, Math.round(1 + (intensity(t) - 0.4) / 3.2 * 6)));
   }
 
   function notify(x, z, msg, amt) {
@@ -121,17 +145,55 @@ export function createDisaster(world, opts = {}) {
     world.onSfx?.(name, x, z, vol);
   }
 
-  function sampleSpot(z) {
-    if (!z.rects.length) return null;
-    let r = z.rng.next() * z.area;
-    let rect = z.rects[z.rects.length - 1];
+  /** Rubble heaps logged at event time: { x0, x1, z0, z1, a, T, zone }. */
+  const rubbleLog = [];
+
+  function rubbleAt(x, z, t, margin = 0) {
+    for (const r of rubbleLog) {
+      if (t < r.T) continue;
+      if (x > r.x0 + margin && x < r.x1 - margin && z > r.z0 + margin && z < r.z1 - margin) return r;
+    }
+    return null;
+  }
+
+  /** Open paving OR a rubble heap that already exists at event time t. */
+  function isOpen(x, z, margin, t) {
+    return world.isOpenGround(x, z, margin) || !!rubbleAt(x, z, t, margin);
+  }
+
+  /** Deterministic ground height for placement (rubble from the event log, not live platforms). */
+  function groundAt(x, z, t) {
+    return rubbleAt(x, z, t) ? Math.max(RUBBLE_TOP, world.surfaceAt(x, z)) : world.surfaceAt(x, z);
+  }
+
+  /** Visual ground height right now (pit rims, decals). */
+  function surfVis(x, z) {
+    return groundAt(x, z, elapsed);
+  }
+
+  /** Weighted spot over open paving + this zone's rubble heaps (3× weight: no safe havens). */
+  function sampleSpot(z, t) {
+    const heaps = rubbleLog.filter((r) => r.zone === z.idx && t >= r.T);
+    const heapArea = heaps.reduce((acc, r) => acc + r.a * RUBBLE_WEIGHT, 0);
+    const total = z.area + heapArea;
+    if (!total) return null;
+    let r = z.rng.next() * total;
+    let rect = null;
+    let onHeap = false;
     for (const c of z.rects) {
       r -= c.a;
       if (r <= 0) { rect = c; break; }
     }
+    if (!rect) {
+      for (const h of heaps) {
+        r -= h.a * RUBBLE_WEIGHT;
+        if (r <= 0) { rect = h; onHeap = true; break; }
+      }
+    }
+    rect ||= z.rects[z.rects.length - 1] || heaps[heaps.length - 1];
     const x = z.rng.range(rect.x0, rect.x1);
     const zz = z.rng.range(rect.z0, rect.z1);
-    if (!z.inRegion(x, zz)) return null;
+    if (!onHeap && !z.inRegion(x, zz)) return null;
     return { x, z: zz };
   }
 
@@ -139,20 +201,20 @@ export function createDisaster(world, opts = {}) {
     return holeLog.filter((h) => t >= h.t0 && t < h.expiresAt + HOLE_CLOSE);
   }
 
-  function shapeFits(shape, x, z) {
-    if (!world.isOpenGround(x, z, 0.2)) return false;
+  function shapeFits(shape, x, z, t) {
+    if (!isOpen(x, z, 0.2, t)) return false;
     for (let i = 0; i < 40; i++) {
       const p = pointAt(shape, (i / 40) * Math.PI * 2, 1.12);
-      if (!world.isOpenGround(x + p.x, z + p.z, 0.15)) return false;
+      if (!isOpen(x + p.x, z + p.z, 0.15, t)) return false;
     }
     return true;
   }
 
-  function surfaceMax(x, z, r) {
-    let y = world.surfaceAt(x, z);
+  function surfaceMax(x, z, r, t = elapsed) {
+    let y = groundAt(x, z, t);
     for (let i = 0; i < 6; i++) {
       const a = (i / 6) * Math.PI * 2;
-      y = Math.max(y, world.surfaceAt(x + Math.cos(a) * r, z + Math.sin(a) * r));
+      y = Math.max(y, groundAt(x + Math.cos(a) * r, z + Math.sin(a) * r, t));
     }
     return y;
   }
@@ -160,29 +222,30 @@ export function createDisaster(world, opts = {}) {
   /* ---------------- scheduling ---------------- */
   function scheduleGap(z, t) {
     const d = difficulty(t);
-    return (Math.max(1.35, 6.5 - d * 4.5) + z.rng.range(0, 1.6)) * z.gapScale / HAZARD_RATE;
+    return (Math.max(1.35, 6.5 - d * 4.5) + z.rng.range(0, 1.6)) * z.gapScale / intensity(t);
   }
 
   function spawnFissure(z, t, kind) {
     const active = activeHoles(t);
     if (active.length >= MAX_HOLES) return false;
-    if (active.filter((h) => h.zone === z.idx).length >= ZONE_HOLE_CAP) return false;
+    const cap = Math.round(ZONE_HOLE_CAP_MIN + (ZONE_HOLE_CAP_MAX - ZONE_HOLE_CAP_MIN) * ramp(t));
+    if (active.filter((h) => h.zone === z.idx).length >= cap) return false;
     for (let i = 0; i < 20; i++) {
-      const p = sampleSpot(z);
+      const p = sampleSpot(z, t);
       const shape = makeShape(z.rng, kind);
       if (!p) continue;
       const r = boundR(shape);
       if (active.some((h) => Math.hypot(h.x - p.x, h.z - p.z) < h.r + r + 1.2)) continue;
       // only dodge objects still falling — settled ones just drop into the hole
       if (dropLog.some((d) => t >= d.t0 && t < (d.land ?? d.end) && Math.hypot(d.x - p.x, d.z - p.z) < r + 1.0)) continue;
-      if (!shapeFits(shape, p.x, p.z)) {
+      if (!shapeFits(shape, p.x, p.z, t)) {
         // narrow streets: crevasses that run along the road fit far more often
         if (shape.kind === 'pit') continue;
         const base = shape.rot;
         let ok = false;
         for (const rot of [0.08, Math.PI / 2 + 0.08, -0.12, Math.PI / 2 - 0.12]) {
           shape.rot = rot;
-          if (shapeFits(shape, p.x, p.z)) { ok = true; break; }
+          if (shapeFits(shape, p.x, p.z, t)) { ok = true; break; }
         }
         if (!ok) { shape.rot = base; continue; }
       }
@@ -210,7 +273,8 @@ export function createDisaster(world, opts = {}) {
     let spawned = 0;
     const rng = z.rng;
     // Street already littered: skip ambient drops (collapse spill still lands)
-    if (!near && dropLog.filter((d) => d.zone === z.idx && t >= d.t0 && t < d.end).length >= ZONE_OBJECT_CAP) return false;
+    const objCap = Math.round(ZONE_OBJECT_CAP_MIN + (ZONE_OBJECT_CAP_MAX - ZONE_OBJECT_CAP_MIN) * ramp(t));
+    if (!near && dropLog.filter((d) => d.zone === z.idx && t >= d.t0 && t < d.end).length >= objCap) return false;
     for (let n = 0; n < count; n++) {
       for (let tries = 0; tries < 10; tries++) {
         let p;
@@ -222,17 +286,17 @@ export function createDisaster(world, opts = {}) {
             z: near.z + near.dir[1] * out + near.dir[0] * side,
           };
         } else {
-          p = sampleSpot(z);
+          p = sampleSpot(z, t);
         }
         const s = rng.range(0.5, 1.0);
         const kind = rng.int(0, 3);
         const vy = FALL_SPEED * rng.range(0.9, 1.15);
         if (!p) continue;
-        if (!world.isOpenGround(p.x, p.z, 0.15)) continue;
+        if (!isOpen(p.x, p.z, 0.15, t)) continue;
         if (activeHoles(t).some((h) => Math.hypot(h.x - p.x, h.z - p.z) < h.r + 0.6)) continue;
         if (dropLog.some((d) => t >= d.t0 - 0.5 && t < d.end && Math.hypot(d.x - p.x, d.z - p.z) < (d.r ?? 1) + s * 0.7 + 0.5)) continue;
         const fallAt = t + WARN_TELEGRAPH;
-        const surf = surfaceMax(p.x, p.z, s * 0.6);
+        const surf = surfaceMax(p.x, p.z, s * 0.6, t);
         const restY = surf + s * 0.36;
         const landAt = fallAt + (FALL_HEIGHT - restY) / vy;
         dropLog.push({ x: p.x, z: p.z, r: s * 0.7, t0: t, land: landAt + 0.3, end: landAt + OBJECT_LIFE, zone: z.idx });
@@ -269,7 +333,12 @@ export function createDisaster(world, opts = {}) {
     const halfWidth = dir[0] ? (fp.z1 - fp.z0) / 2 : (fp.x1 - fp.x0) / 2;
     b.front = { x: cx + dir[0] * halfDepth, z: cz + dir[1] * halfDepth, dir, spread: halfWidth };
     // Facade chunks rain onto the street in front, timed with the fall
-    spawnDrops(z, t + b.telegraph * 0.4, (1 + (difficulty(t) > 0.5 ? 1 : 0)) * HAZARD_RATE, b.front);
+    spawnDrops(z, t + b.telegraph * 0.4, (1 + (difficulty(t) > 0.5 ? 1 : 0)) * (1 + Math.round(ramp(t))), b.front);
+    rubbleLog.push({
+      x0: fp.x0 + 0.15, x1: fp.x1 - 0.15, z0: fp.z0 + 0.15, z1: fp.z1 - 0.15,
+      a: (fp.x1 - fp.x0 - 0.3) * (fp.z1 - fp.z0 - 0.3),
+      T: t + b.telegraph, zone: z.idx,
+    });
     b.chunks = planCollapseChunks(b, t + b.telegraph);
     b.creaked = false;
     if (t > elapsed - STALE) notify(cx, cz, 'Building giving way!', 0.25);
@@ -287,7 +356,7 @@ export function createDisaster(world, opts = {}) {
     const dir = FACE_DIR[b.face] || [0, 1];
     const cx = (fp.x0 + fp.x1) / 2;
     const cz = (fp.z0 + fp.z1) / 2;
-    const n = (b.collapseType === 'pancake' ? 9 : 6) * HAZARD_RATE;
+    const n = Math.round((b.collapseType === 'pancake' ? 9 : 6) * (1 + ramp(T)));
     const speed = b.collapseType === 'facade' ? 9 : 6.5;
     const chunks = [];
     for (let i = 0; i < n; i++) {
@@ -306,7 +375,7 @@ export function createDisaster(world, opts = {}) {
       const tLand = (v.y + Math.sqrt(v.y * v.y + 2 * GRAVITY * (p0.y - restY))) / GRAVITY;
       const lx = p0.x + v.x * tLand;
       const lz = p0.z + v.z * tLand;
-      const settles = world.isOpenGround(lx, lz, 0) && !activeHoles(T + tLand).some((h) => Math.hypot(h.x - lx, h.z - lz) < h.r);
+      const settles = isOpen(lx, lz, 0, T + tLand) && !activeHoles(T + tLand).some((h) => Math.hypot(h.x - lx, h.z - lz) < h.r);
       const c = {
         s, p0, v, tLand, T, lx, lz, restY, settles,
         rot: new THREE.Euler(vr.range(0, 3), vr.range(0, 6), vr.range(0, 3)),
@@ -397,8 +466,9 @@ export function createDisaster(world, opts = {}) {
     }
     if (roll < 0.38) return spawnDrops(z, t, 1 + (d > 0.4 && z.rng.chance(0.6) ? 1 : 0));
     if (roll < 0.6) return spawnFissure(z, t) || spawnDrops(z, t, 1);
-    if (roll < 0.74) return spawnCar(z, t) || spawnCar(z, t) || spawnDrops(z, t, 1);
-    return startCollapse(z, t) || spawnDrops(z, t, 1);
+    if (roll < 0.74) return (t > 40 && (spawnCar(z, t) || spawnCar(z, t))) || spawnDrops(z, t, 1);
+    // half the collapse share goes to debris instead, so the town lasts a 10-min round
+    return (t > 25 && z.rng.chance(0.5) && startCollapse(z, t)) || spawnDrops(z, t, 1);
   }
 
   function fireDueEvents() {
@@ -409,12 +479,13 @@ export function createDisaster(world, opts = {}) {
       const t = z.next;
       z.index += 1;
       const d = difficulty(t);
+      const k = ramp(t);
       fireOne(z, t);
       if (d > 0.25 && z.rng.chance(0.42 + d * 0.28)) fireOne(z, t);
       // Ground keeps splitting: extra narrow cracks, more often as it heats up
-      if (z.rng.chance(0.3 + d * 0.35)) spawnFissure(z, t, 'crack');
-      // Debris rain: an extra falling object most beats, two when it heats up
-      if (z.rng.chance(0.45 + d * 0.2)) spawnDrops(z, t, 1);
+      if (z.rng.chance(0.12 + k * 0.55)) spawnFissure(z, t, 'crack');
+      // Debris rain: extra falling objects, more as the intensity climbs
+      if (z.rng.chance(0.2 + k * 0.6)) spawnDrops(z, t, 1 + (k > 0.6 && z.rng.chance(0.5) ? 1 : 0));
       z.next = t + scheduleGap(z, t);
     }
     // Trim logs well past relevance
@@ -472,7 +543,7 @@ export function createDisaster(world, opts = {}) {
       const t = (i / N) * Math.PI * 2;
       const p = pointAt(shape, t, 1);
       pts.push(p);
-      surf.push(world.surfaceAt(x + p.x * 1.002, z + p.z * 1.002));
+      surf.push(surfVis(x + p.x * 1.002, z + p.z * 1.002));
     }
     const positions = [];
     const colors = [];
@@ -605,8 +676,8 @@ export function createDisaster(world, opts = {}) {
         const px = -dz;
         const pz = dx;
         const base = pos.length / 3;
-        const y0 = world.surfaceAt(f.x + cx, f.z + cz) + 0.012;
-        const y1 = world.surfaceAt(f.x + nx2, f.z + nz2) + 0.012;
+        const y0 = surfVis(f.x + cx, f.z + cz) + 0.012;
+        const y1 = surfVis(f.x + nx2, f.z + nz2) + 0.012;
         pos.push(cx + px * w, y0, cz + pz * w, cx - px * w, y0, cz - pz * w, nx2, y1, nz2);
         idx.push(base, base + 1, base + 2);
         if (w2 > 0.02) {
@@ -633,7 +704,7 @@ export function createDisaster(world, opts = {}) {
     const g = new THREE.Group();
     g.position.set(x, 0, z);
     const N = 72;
-    const lift = (vx, vz) => world.surfaceAt(x + vx, z + vz) + 0.02;
+    const lift = (vx, vz) => surfVis(x + vx, z + vz) + 0.02;
 
     // Fill
     const fillShape = new THREE.Shape();
@@ -746,7 +817,7 @@ export function createDisaster(world, opts = {}) {
             const qz = f.z + Math.sin(a) * d;
             if (containsOffset(shape, qx - f.x, qz - f.z, 1.15)) continue;
             if (world.holeAt(qx, qz)) continue;
-            if (!world.isOpenGround(qx, qz, 0.3)) break;
+            if (!isOpen(qx, qz, 0.3, elapsed)) break;
             return { x: qx, z: qz };
           }
         }
@@ -861,8 +932,12 @@ export function createDisaster(world, opts = {}) {
 
     world.root.remove(b.group);
     world.colliders = world.colliders.filter((c) => c.ref !== b);
+    // Low walkable heap (no wall): you can climb on it — and hazards follow you there
     world.add(makeRubble(fp, b.height, b.collapseSeed || 1));
-    world.collide(fp.x0 + 0.3, fp.z0 + 0.3, fp.x1 - 0.3, fp.z1 - 0.3, 1.1, undefined, b);
+    world.platforms.push({
+      x0: fp.x0 + 0.15, x1: fp.x1 - 0.15, z0: fp.z0 + 0.15, z1: fp.z1 - 0.15,
+      top: RUBBLE_TOP, rubble: true,
+    });
     if (silent) {
       for (const c of b.chunks || []) debris.push(c);
       return;
@@ -1337,6 +1412,17 @@ export function createDisaster(world, opts = {}) {
     get elapsed() { return elapsed; },
     get fissureCount() { return fissures.length; },
     get dropCount() { return drops.length; },
+    /** Current quake intensity on the shared clock + shindo (1–7) for the HUD. */
+    get intensity() { return intensity(elapsed); },
+    get shindo() { return shindo(elapsed); },
+    /** Debug: where hazards landed (event log) and the rubble heaps. */
+    get debugSpots() {
+      return {
+        holes: holeLog.map((h) => [h.x, h.z, h.t0]),
+        drops: dropLog.map((d) => [d.x, d.z, d.t0]),
+        rubble: rubbleLog.map((r) => [r.x0, r.x1, r.z0, r.z1, r.T]),
+      };
+    },
     get cars() { return cars.map((c) => ({ x0: c.x0, z0: c.z0, x1: c.x1, z1: c.z1, state: c.state, travel: c.travel })); },
   };
 }

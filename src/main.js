@@ -73,6 +73,8 @@ let roomSeed = WORLD_SEED;
 /** Solo-round cap (server ms clock) — null for versus rounds. */
 let roundEndsAt = null;
 let roundMode = 'versus';
+let lastShindoSeen = 0;
+let aliveSince = performance.now();
 /** serverNow − Date.now(), best (lowest-latency) estimate. */
 let clockOffset = null;
 const SPAWNS = spawnPoints();
@@ -578,6 +580,7 @@ function beginPlay({ online = false, spectate = false } = {}) {
   }
   soloSpectate = false;
   soloDeadShownAt = 0;
+  lastShindoSeen = 0;
   hud.hideResults();
   world = buildWorld(scene, { seed: roomSeed });
   player.world = world;
@@ -588,6 +591,7 @@ function beginPlay({ online = false, spectate = false } = {}) {
   deathReason = '';
   lightPulse = 0;
   survived = 0;
+  aliveSince = performance.now();
   score = 0;
   lobbyReady = false;
   hud.hideLobby();
@@ -761,6 +765,7 @@ function frame() {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, clock.getDelta());
 
+  world.viewPos = camera.position;
   if (roomStartedAt && (phase === 'playing' || phase === 'spectate')) {
     world.roomElapsed = Math.max(0, (serverNowMs() - roomStartedAt) / 1000);
   }
@@ -776,10 +781,17 @@ function frame() {
   }
 
   if (phase === 'playing' && running && player.alive) {
-    survived += dt;
+    // wall clock, not summed frame dt (dt is capped, so slow devices undercounted)
+    survived = (performance.now() - aliveSince) / 1000;
     const speed = Math.hypot(player.vel.x, player.vel.z);
     score = survived * 10 + speed * dt * 2;
     for (const u of world.updaters) u(dt, player);
+    // Intensity steps up → tell the player
+    const sh = world.disaster?.shindo || 1;
+    if (sh > lastShindoSeen) {
+      if (lastShindoSeen) hud.flash(`Quake intensifying — 震度 ${sh}`);
+      lastShindoSeen = sh;
+    }
     // Offline solo: outlast the 10-minute cap and you win
     if (!onlineMode && roundEndsAt && Date.now() >= roundEndsAt && player.alive) {
       deathReason = 'survived';
@@ -794,6 +806,7 @@ function frame() {
     hud.update({
       energy: player.energy, time: survived, score,
       players: playerCount, lives: player.lives, exhausted: player.exhausted,
+      shindo: world.disaster?.shindo,
     });
 
     net.sendState({
@@ -823,7 +836,7 @@ function frame() {
     applySpectateCamera(dt);
     hud.update({
       energy: 0, time: survived, score,
-      players: playerCount, lives: 0,
+      players: playerCount, lives: 0, shindo: world.disaster?.shindo,
     });
     net.sendState({
       x: player.pos.x, y: player.pos.y, z: player.pos.z,

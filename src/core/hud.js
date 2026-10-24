@@ -52,6 +52,7 @@ export function createHud() {
       <span class="heart on" data-i="0"></span>
       <span class="heart on" data-i="1"></span>
       <span class="heart on" data-i="2"></span>
+      <span class="shindo" title="Quake intensity (shindo)">震度 1</span>
     </div>
     <div class="vital-row">
       <span class="vital-label">ENERGY</span>
@@ -396,7 +397,19 @@ export function createHud() {
     vitals.classList.remove('on');
   }
 
-  function update({ energy, time, score, players, lives, exhausted = false }) {
+  const shindoEl = vitals.querySelector('.shindo');
+  let lastShindo = 0;
+  function update({ energy, time, score, players, lives, exhausted = false, shindo = 0 }) {
+    if (shindo && shindo !== lastShindo) {
+      lastShindo = shindo;
+      shindoEl.textContent = `震度 ${shindo}`;
+      shindoEl.dataset.level = String(shindo);
+      if (shindo > 1) {
+        shindoEl.classList.remove('bump');
+        void shindoEl.offsetWidth; // restart the bump animation
+        shindoEl.classList.add('bump');
+      }
+    }
     energyFill.style.width = `${Math.round(clamp01(energy) * 100)}%`;
     energyFill.classList.toggle('exhausted', !!exhausted);
     energyFill.classList.toggle('low', energy < 0.28);

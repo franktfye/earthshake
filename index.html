@@ -98,6 +98,19 @@
     25% { transform: translateX(-4px); }
     75% { transform: translateX(4px); }
   }
+  .shindo {
+    margin-left: auto; padding: 2px 8px; border-radius: 6px;
+    font: 800 12px/1.3 inherit; color: #fff; background: #6a8a5a;
+    font-variant-numeric: tabular-nums;
+  }
+  .shindo[data-level="2"] { background: #8a9a4a; }
+  .shindo[data-level="3"] { background: #c8a030; }
+  .shindo[data-level="4"] { background: #d8802a; }
+  .shindo[data-level="5"] { background: #d05828; }
+  .shindo[data-level="6"] { background: #b8302a; }
+  .shindo[data-level="7"] { background: #7a1830; }
+  .shindo.bump { animation: shindo-bump .6s ease; }
+  @keyframes shindo-bump { 30% { transform: scale(1.35); } }
   .lives-row {
     display: flex; gap: 7px; align-items: center;
     margin-bottom: 8px; min-height: 18px;

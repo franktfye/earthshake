@@ -3,6 +3,9 @@ import { PAL } from '../core/palette.js';
 import { cel, flat } from '../core/toon.js';
 import { shopSign, litWindowTex } from '../core/textures.js';
 import { bake, trs, rngKit, shadowify } from '../core/util.js';
+import { patchGroundMaterial } from './holePunch.js';
+
+let rubbleMat = null;
 
 const WALLS = [
   PAL.wallWhite, PAL.wallCream, PAL.wallBlue, PAL.wallBeige,
@@ -177,7 +180,6 @@ export function makeShop(o) {
 
 /** Rubble pile replacing a collapsed building. */
 export function makeRubble(footprint, height, seed = 1) {
-  const m = mats();
   const rng = rngKit(seed);
   const g = new THREE.Group();
   g.name = 'rubble';
@@ -185,24 +187,36 @@ export function makeRubble(footprint, height, seed = 1) {
   const cz = (footprint.z0 + footprint.z1) / 2;
   const ww = footprint.x1 - footprint.x0;
   const dd = footprint.z1 - footprint.z0;
+  // Low, walkable heap (~0.4 m) spread over the whole footprint; a few broken
+  // wall stubs at the corners keep the silhouette of a fallen house.
   const parts = [];
-  for (let i = 0; i < 7; i++) {
-    const bw = rng.range(0.6, ww * 0.45);
-    const bh = rng.range(0.3, Math.min(1.8, height * 0.35));
-    const bd = rng.range(0.5, dd * 0.4);
+  const n = 16 + Math.round(height * 1.5);
+  for (let i = 0; i < n; i++) {
+    const bw = rng.range(0.5, 1.4);
+    const bh = rng.range(0.12, 0.42);
+    const bd = rng.range(0.4, 1.2);
     parts.push({
       geometry: new THREE.BoxGeometry(bw, bh, bd),
       matrix: trs(
-        rng.range(-ww * 0.3, ww * 0.3),
-        bh / 2,
-        rng.range(-dd * 0.3, dd * 0.3),
-        rng.range(-0.4, 0.4),
+        rng.range(-ww * 0.42, ww * 0.42),
+        0.06 + bh * 0.35,
+        rng.range(-dd * 0.42, dd * 0.42),
+        rng.range(-0.25, 0.25),
         rng.range(0, Math.PI),
-        rng.range(-0.3, 0.3)
+        rng.range(-0.25, 0.25)
       ),
     });
   }
-  const mesh = new THREE.Mesh(bake(parts), m.rubble);
+  for (const [sx, sz] of [[-1, -1], [1, 1]]) {
+    const h = rng.range(0.6, Math.min(1.6, height * 0.3));
+    parts.push({
+      geometry: new THREE.BoxGeometry(0.25, h, rng.range(0.8, 1.6)),
+      matrix: trs(sx * (ww / 2 - 0.3), h / 2, sz * (dd / 2 - 0.6), 0, rng.range(-0.2, 0.2), sx * 0.12),
+    });
+  }
+  // Punchable so a fissure opening under the heap swallows the rubble too
+  if (!rubbleMat) rubbleMat = patchGroundMaterial(cel({ color: PAL.rubble, bands: 3, tint: 0x5c5680, cache: false }));
+  const mesh = new THREE.Mesh(bake(parts), rubbleMat);
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   g.add(mesh);

@@ -61,14 +61,20 @@ survivors.
 - Telegraphs (1 s): a closing red target ring + growing shadow for falling
   objects, the exact red outline for fissures, creaking + shaking for houses,
   honk + red lane chevrons (1.2 s) for runaway cars.
-- Hazard rate is doubled (`HAZARD_RATE` in `src/world/disaster.js`): late
-  game runs ~50 open fissures, ~260 fallen objects, 11–16 runaway cars and
-  ~145 collapsed houses by 80 s.
-- Fissures: `pit`, `chasm` and narrow `crack`; up to 12 open per zone (64
+- **Difficulty curve** (`intensity()` in `src/world/disaster.js`, on the
+  shared round clock): calm start (intensity 0.4 → ~1.0 at 30 s), ~2.0 at
+  2 min (the old "doubled" level), ~2.8 at 5 min, ~3.6 at 10 min. It scales
+  hazard frequency, the per-zone fissure / object caps and the extra crack /
+  debris rolls; collapses start at 25 s, runaway cars at 40 s. The HUD shows
+  it as a shindo badge (震度 1–7) with a toast when it steps up.
+- Collapsed houses become low walkable **rubble heaps** — and hazard targets
+  (3× weight per area, from the moment of collapse): objects land on them and
+  fissures cut through them, swallowing the rubble. No safe havens.
+- Fissures: `pit`, `chasm` and narrow `crack`; per-zone cap ramps 4 → 12 (64
   map-wide, packed in a data texture for the ground-cut shader), 60 s each.
-- Fallen objects, collapse rubble and car wrecks stay **solid for 35 s** (max
-  52 per zone); a fissure opening under them swallows them. Collapses throw
-  twice the rubble and spill twice the falling objects into the street.
+- Fallen objects, collapse rubble and car wrecks stay **solid for 35 s**
+  (per-zone cap ramps 16 → 52); a fissure opening under them swallows them.
+  Collapses throw more rubble and spill more falling objects as it intensifies.
 - Players, street clutter (bins, planters, bikes, cones), parked cars and
   wrecks are solid.
 

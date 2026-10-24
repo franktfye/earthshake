@@ -78,10 +78,14 @@ export function buildWorld(scene, opts = {}) {
     z1: MAP.half - 0.6,
   };
 
-  /** Top of the paved surface at (x, z), ignoring holes. */
+  /**
+   * Top of the paved surface at (x, z), ignoring holes and rubble heaps
+   * (hazard placement adds rubble from its deterministic event log instead).
+   */
   function surfaceAt(x, z) {
     let y = 0;
     for (const p of platforms) {
+      if (p.rubble) continue;
       if (x < p.x0 || x > p.x1 || z < p.z0 || z > p.z1) continue;
       if (p.top > y) y = p.top;
     }
