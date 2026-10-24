@@ -9,6 +9,7 @@ import { createControls } from './core/controls.js';
 import { buildWorld, WORLD_SEED } from './world/index.js';
 import { spawnPoints } from './world/street.js';
 import { createNetClient } from './net/client.js';
+import { healthUrl } from './net/protocol.js';
 import { createRemoteManager } from './net/remotes.js';
 import { createBgm } from './core/bgm.js';
 import { initPinocLayer } from './world/pinocLayer.js';
@@ -662,6 +663,22 @@ hud.onStart = (name, gender) => {
 hud.onReady = () => readyUp();
 hud.onReadyFire = () => readyUp();
 hud.showStart();
+
+// Server load bars on the login card (polled while the menu is up)
+async function pollHealth() {
+  if (phase !== 'menu' && phase !== 'roundEnd') return;
+  try {
+    const ctl = new AbortController();
+    const to = setTimeout(() => ctl.abort(), 2500);
+    const r = await fetch(healthUrl(), { signal: ctl.signal, cache: 'no-store' });
+    clearTimeout(to);
+    hud.setServerLoad(r.ok ? await r.json() : null);
+  } catch {
+    hud.setServerLoad(null);
+  }
+}
+pollHealth();
+setInterval(pollHealth, 4000);
 
 canvas.addEventListener('click', () => {
   if (phase === 'playing' && running && !controls.mobile && !player.locked) controls.lock();

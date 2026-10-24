@@ -184,10 +184,68 @@ export function createHud() {
           <span class="full-only">Back</span>
           <i aria-hidden="true">→</i>
         </button>
+        <div class="server-load start-only" aria-live="polite">
+          <span class="sl-label">Server load</span>
+          <span class="sl-bars"><i></i><i></i><i></i><i></i><i></i></span>
+          <span class="sl-text">checking…</span>
+        </div>
         <p class="net-status start-only"></p>
         <p class="made-by">Made by Frank</p>
       </div>
     </section>`;
+
+  // ---- content warning (shown before the menu; can be skipped next time)
+  const WARN_KEY = 'aftershock-warning-ack';
+  let warnAck = false;
+  try { warnAck = localStorage.getItem(WARN_KEY) === '1'; } catch { /* */ }
+  const warning = el('div', 'content-warning' + (warnAck ? '' : ' on'), root, `
+    <section class="cw-card" role="alertdialog" aria-labelledby="cw-title" aria-describedby="cw-body">
+      <div class="cw-icon" aria-hidden="true">⚠</div>
+      <h2 id="cw-title">Content warning</h2>
+      <p id="cw-body">
+        <b>Aftershock is an anxiety-inducing game.</b> It simulates an earthquake:
+        constant ground shaking and camera shake, collapsing buildings, fire,
+        explosions, sudden loud sounds, red flashing screens and time pressure.
+      </p>
+      <p class="cw-small">
+        If you are sensitive to stress, panic, motion or flashing effects — or have
+        been affected by a real earthquake — please take care, play in short
+        sessions, and stop at any time. Muting sound (top right) lowers intensity.
+      </p>
+      <label class="cw-check"><input type="checkbox" class="cw-remember" /> Don't show this again</label>
+      <div class="cw-actions">
+        <button type="button" class="cw-ok">I understand — continue</button>
+        <a class="cw-leave" href="about:blank">Leave</a>
+      </div>
+    </section>`);
+  warning.querySelector('.cw-ok').addEventListener('click', () => {
+    if (warning.querySelector('.cw-remember').checked) {
+      try { localStorage.setItem(WARN_KEY, '1'); } catch { /* */ }
+    }
+    warning.classList.remove('on');
+    overlay.querySelector('.name-input')?.focus();
+  });
+
+  // ---- server load bars on the login card
+  const slBars = [...overlay.querySelectorAll('.sl-bars i')];
+  const slText = overlay.querySelector('.server-load .sl-text');
+  const slBox = overlay.querySelector('.server-load');
+  function setServerLoad(h) {
+    if (!h) {
+      slBox.dataset.level = 'off';
+      slBars.forEach((b) => b.classList.remove('on'));
+      slText.textContent = 'offline — solo mode';
+      return;
+    }
+    const load = Math.max(0, Math.min(1, h.load ?? (h.players / (h.max || 30))));
+    const n = Math.max(1, Math.ceil(load * 5));
+    slBars.forEach((b, i) => b.classList.toggle('on', i < n));
+    const level = load >= 0.95 ? 'full' : load >= 0.7 ? 'high' : load >= 0.4 ? 'mid' : 'low';
+    slBox.dataset.level = level;
+    const word = { low: 'Low', mid: 'Moderate', high: 'High', full: 'Full' }[level];
+    const phase = h.phase === 'playing' ? ' · round in progress (you’ll observe)' : '';
+    slText.textContent = `${word} · ${h.players}/${h.max} runners${phase}`;
+  }
 
   const actionBtn = overlay.querySelector('.menu-action');
   const nameInput = overlay.querySelector('.name-input');
@@ -492,6 +550,7 @@ export function createHud() {
     hideSpectate,
     showDead,
     showRoundEnd,
+    setServerLoad,
     requestFullscreen,
     hideResults,
     setRoundTimer,

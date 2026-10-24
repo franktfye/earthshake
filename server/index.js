@@ -17,6 +17,7 @@
 import http from 'node:http';
 import { WebSocketServer } from 'ws';
 import { randomBytes } from 'node:crypto';
+import os from 'node:os';
 
 const PORT = Number(process.env.PORT || 19090);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -30,6 +31,29 @@ const ROUND_END_HOLD_MS = 6_000;
 const SOLO_ROUND_MS = 10 * 60_000;
 
 const players = new Map();
+
+/* Load estimate from the server's own config + host: seats used vs the
+ * 30-player cap, host CPU load per core, event-loop lag against the 50 ms
+ * tick, and process memory against a 512 MB budget. Worst one wins. */
+const MEM_BUDGET = 512 * 1024 * 1024;
+let loopLag = 0;
+{
+  let last = performance.now();
+  setInterval(() => {
+    const now = performance.now();
+    const lag = Math.max(0, now - last - 250);
+    loopLag = loopLag * 0.8 + lag * 0.2;
+    last = now;
+  }, 250).unref();
+}
+function loadEstimate() {
+  const seats = players.size / MAX_PLAYERS;
+  const cpu = Math.min(1, os.loadavg()[0] / Math.max(1, os.cpus().length));
+  const lag = Math.min(1, loopLag / TICK_MS);
+  const mem = Math.min(1, process.memoryUsage().rss / MEM_BUDGET);
+  const load = Math.max(seats, cpu * 0.9, lag, mem * 0.8);
+  return { load: +load.toFixed(3), seats: +seats.toFixed(3), cpu: +cpu.toFixed(3), lag: +lag.toFixed(3), mem: +mem.toFixed(3) };
+}
 let phase = 'lobby'; // lobby | playing | roundEnd
 let roomSeed = WORLD_SEED;
 let startedAt = 0; // round play clock
@@ -215,9 +239,15 @@ function checkRoundEnd(now = Date.now()) {
 
 const server = http.createServer((req, res) => {
   if (req.url === '/health') {
-    res.writeHead(200, { 'content-type': 'application/json' });
+    res.writeHead(200, {
+      'content-type': 'application/json',
+      'access-control-allow-origin': '*',
+      'cache-control': 'no-store',
+    });
     res.end(JSON.stringify({
       ok: true,
+      ...loadEstimate(),
+      tickMs: TICK_MS,
       phase,
       players: players.size,
       max: MAX_PLAYERS,

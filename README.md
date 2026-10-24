@@ -34,7 +34,12 @@ restart both (only restart the room when `/health` shows no players).
 |---|---|
 | WASD walk · Shift run · Space jump · mouse orbit | Stick walk · RUN · JUMP · drag orbit |
 
-Login card: name + character (Kenji / Aoi), auto full screen on join, full
+A content warning (anxiety-inducing: shaking, collapses, fire, explosions,
+loud sounds, red flashes) is shown before the menu, with "don't show again".
+Login card: name + character (Kenji / Aoi), a **server load** meter (5 bars:
+worst of seats used / 30, host CPU per core, event-loop lag vs the 50 ms tick,
+memory vs 512 MB — from the room server's `/health`, polled every 4 s; shows
+"offline — solo mode" when unreachable), auto full screen on join, full
 screen toggle in the top bar. Corner minimap shows streets, open fissures and
 survivors.
 

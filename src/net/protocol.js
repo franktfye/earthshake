@@ -25,6 +25,12 @@ export function getOrCreateClientId() {
   }
 }
 
+/** HTTP /health endpoint of the same room server the WebSocket uses. */
+export function healthUrl() {
+  const u = wsUrl().replace(/^ws/, 'http').replace(/\/+$/, '');
+  return `${u}/health`;
+}
+
 export function wsUrl() {
   const params = new URLSearchParams(location.search);
   if (params.get('ws')) return params.get('ws');
