@@ -22,6 +22,9 @@ SFX = {
   'horn':       ('car horn honking urgently, repeated loud honks, street', 1.4),
   'car_rush':   ('car engine accelerating hard, loud revving engine passing by fast', 2.2),
   'car_crash':  ('car crashing into a wall, metal crunch, glass shattering, debris', 2.0),
+  'explosion':  ('loud gas explosion blast, deep boom with debris and glass shattering', 3.0),
+  'fire_ignite': ('fire bursting into flames, whoosh of ignition then crackling', 2.0),
+  'fire_loop':  ('steady crackling fire burning, wood fire crackle, continuous', 10.0),
 }
 N = int(os.environ.get('N', 3))
 only = sys.argv[1:]

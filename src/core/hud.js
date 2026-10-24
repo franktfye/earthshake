@@ -513,6 +513,8 @@ function formatTime(s) {
 function reasonLabel(r) {
   if (r === 'fell') return 'Fell into a fissure.';
   if (r === 'car') return 'Run over by a runaway car.';
+  if (r === 'fire') return 'Burned in a fire.';
+  if (r === 'explosion') return 'Caught in an explosion.';
   if (r === 'survived') return 'You outlasted the aftershock — all 10 minutes!';
   if (r === 'debris') return 'Hit by falling debris.';
   if (r === 'collapse') return 'Caught in a collapse.';

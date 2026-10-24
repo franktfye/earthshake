@@ -8,6 +8,13 @@ mkdir -p "$OUT"
 for f in "$RAW"/*.wav; do
   n=$(basename "$f" .wav)
   [[ "$n" == *_c[0-9] ]] && continue
+  if [[ "$n" == fire_loop ]]; then
+    PY=${SFX_PYTHON:-python3}
+    "$PY" -I "$(dirname "$0")/loop.py" "$f" "/tmp/$n.loop.wav" 2
+    ffmpeg -loglevel error -y -i "/tmp/$n.loop.wav" -af "loudnorm=I=-20:TP=-2" \
+      -ac 1 -ar 44100 -b:a 96k "$OUT/$n.mp3"
+    continue
+  fi
   if [[ "$n" == rumble ]]; then
     # seamless loop built in numpy (ffmpeg concat after asplit is unreliable here)
     PY=${SFX_PYTHON:-python3}

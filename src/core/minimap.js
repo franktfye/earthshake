@@ -81,6 +81,14 @@ export function createMinimap() {
       ctx.fill();
     }
 
+    // fires (never go out)
+    ctx.fillStyle = '#ff7a2a';
+    for (const f of world?.fireMarks || []) {
+      ctx.beginPath();
+      ctx.arc(px(f.x), px(f.z), Math.max(2.2, f.r * k), 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     // other survivors
     const dot = Math.max(2, W / 70);
     ctx.fillStyle = '#3d6ec4';

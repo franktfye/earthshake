@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import { PAL } from '../core/palette.js';
 import { cel, flat } from '../core/toon.js';
-import { rngKit, box, bake } from '../core/util.js';
+import { rngKit, box, bake, mergeStatic } from '../core/util.js';
 import { makeRubble } from './buildings.js';
 import { makeSedan, makeVan, makeKeiTruck } from './props.js';
 import { MAP } from './street.js';
+import { createHazardFx } from './hazardFx.js';
 import { setHolePunches, clearHolePunches, MAX_HOLES } from './holePunch.js';
 import {
   makeShape, pointAt, containsOffset, boundR, outlinePts,
@@ -60,6 +61,14 @@ const CAR_HALF_W = 0.8;
 /** Extra danger width either side of a runaway car (matches the red lane stripe). */
 const CAR_HIT_PAD = 0.55;
 const CAR_CRASH_R = 2.2;
+/** Fires ignite at houses (front or rubble) and never go out. */
+const FIRE_TELEGRAPH = 1.6;
+const FIRE_CAP_MIN = 2;
+const FIRE_CAP_MAX = 8;
+/** Gas blasts at house fronts; hazard drums that blow up after landing. */
+const BLAST_TELEGRAPH = 1.7;
+const BOMB_FUSE = 2.4;
+const BOMB_R = 2.8;
 
 function hash(a, b) {
   let h = (a ^ Math.imul(b + 0x9e3779b9, 0x85ebca6b)) >>> 0;
@@ -98,10 +107,7 @@ export function createDisaster(world, opts = {}) {
 
   /* ---------------- materials (shared, created once per world) ---------- */
   const pitMat = cel({ color: 0xffffff, vertexColors: true, bands: 3, tint: 0x2a2236, side: THREE.DoubleSide });
-  const floorMat = flat({ color: 0x120d0e });
-  const deepRubbleMat = flat({ color: 0x2b2325 });
-  const crustRoad = cel({ color: PAL.road, bands: 3, tint: 0x6a608f });
-  const crustWalk = cel({ color: PAL.sidewalk, bands: 3, tint: 0x7d74a0 });
+  const crustVC = cel({ color: 0xffffff, vertexColors: true, bands: 3, tint: 0x6a608f });
   const crackMat = new THREE.MeshBasicMaterial({
     color: 0x2b2533, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
   });
@@ -294,7 +300,8 @@ export function createDisaster(world, opts = {}) {
           p = sampleSpot(z, t);
         }
         const s = rng.range(0.5, 1.0);
-        const kind = rng.int(0, 3);
+        const bomb = !near && t > 20 && rng.chance(0.05 + 0.12 * ramp(t));
+        const kind = bomb ? 4 : rng.int(0, 3);
         const vy = FALL_SPEED * rng.range(0.9, 1.15);
         if (!p) continue;
         if (!isOpen(p.x, p.z, 0.15, t)) continue;
@@ -304,9 +311,13 @@ export function createDisaster(world, opts = {}) {
         const surf = surfaceMax(p.x, p.z, s * 0.6, t);
         const restY = surf + s * 0.36;
         const landAt = fallAt + (FALL_HEIGHT - restY) / vy;
-        dropLog.push({ x: p.x, z: p.z, r: s * 0.7, t0: t, land: landAt + 0.3, end: landAt + OBJECT_LIFE, zone: z.idx });
+        // a hazard drum lies there only until its fuse runs out
+        const explodeAt = bomb ? landAt + BOMB_FUSE : null;
+        dropLog.push({ x: p.x, z: p.z, r: s * 0.7, t0: t, land: landAt + 0.3, end: bomb ? explodeAt : landAt + OBJECT_LIFE, zone: z.idx });
+        if (bomb) blasts.push({ x: p.x, z: p.z, r: BOMB_R, t0: landAt, at: explodeAt, kind: 'drum', y: surf });
         drops.push({
           x: p.x, z: p.z, s, kind, vy, surf, restY,
+          endAt: bomb ? explodeAt : null,
           radius: s * 0.85,
           t0: t, fallAt, landAt,
           state: 'wait', warn: null, mesh: null,
@@ -463,6 +474,73 @@ export function createDisaster(world, opts = {}) {
     return false;
   }
 
+  /* ---------------- fire + explosions ---------------- */
+  const fireLog = []; // { id, x, z, r, igniteAt, zone, warned }
+  const fireEnts = [];
+  const blasts = [];  // { x, z, r, t0, at, kind, y, sign?, ring?, done? }
+  let fireSeq = 0;
+  const fx = createHazardFx(world);
+
+  /** A point on the street side of house `b`, `out` metres beyond its front. */
+  function frontPoint(b, rng, out) {
+    const fp = b.footprint;
+    const dir = FACE_DIR[b.face] || [0, 1];
+    const cx = (fp.x0 + fp.x1) / 2;
+    const cz = (fp.z0 + fp.z1) / 2;
+    const halfDepth = dir[0] ? (fp.x1 - fp.x0) / 2 : (fp.z1 - fp.z0) / 2;
+    const halfWidth = dir[0] ? (fp.z1 - fp.z0) / 2 : (fp.x1 - fp.x0) / 2;
+    const side = rng.range(-halfWidth * 0.7, halfWidth * 0.7);
+    return {
+      x: cx + dir[0] * (halfDepth + out) + dir[1] * side,
+      z: cz + dir[1] * (halfDepth + out) + dir[0] * side,
+    };
+  }
+
+  /**
+   * Fire at a house front or on its rubble; never goes out. `at` = forced spot
+   * + ignite time (a gas blast lighting its own fire).
+   */
+  function spawnFire(z, t, at = null) {
+    const cap = Math.round(FIRE_CAP_MIN + (FIRE_CAP_MAX - FIRE_CAP_MIN) * ramp(t));
+    if (!at && fireLog.filter((f) => f.zone === z.idx).length >= cap) return false;
+    for (let tries = 0; tries < 8; tries++) {
+      let p;
+      const r = z.rng.range(1.1, 1.9);
+      const heaps = rubbleLog.filter((h) => h.zone === z.idx && t >= h.T);
+      const onHeap = !at && heaps.length && z.rng.chance(0.35);
+      if (at) {
+        p = { x: at.x, z: at.z };
+      } else if (onHeap) {
+        const h = heaps[z.rng.int(0, heaps.length - 1)];
+        p = { x: z.rng.range(h.x0, h.x1), z: z.rng.range(h.z0, h.z1) };
+      } else {
+        if (!z.buildings.length) return false;
+        const b = z.buildings[z.rng.int(0, z.buildings.length - 1)];
+        p = frontPoint(b, z.rng, z.rng.range(0.2, 1.1));
+      }
+      if (fireLog.some((f) => Math.hypot(f.x - p.x, f.z - p.z) < f.r + r + 0.6)) continue;
+      const id = ++fireSeq;
+      const entry = { id, x: p.x, z: p.z, r, igniteAt: at ? at.time : t + FIRE_TELEGRAPH, t0: t, zone: z.idx, warned: !at };
+      fireLog.push(entry);
+      fireEnts.push({ ...entry, fx: null, sign: null, ring: null });
+      return true;
+    }
+    return false;
+  }
+
+  /** Gas leak at a house front → explosion after the telegraph; may start a fire. */
+  function spawnGasBlast(z, t) {
+    if (!z.buildings.length) return false;
+    const b = z.buildings[z.rng.int(0, z.buildings.length - 1)];
+    const p = frontPoint(b, z.rng, z.rng.range(0.3, 1.4));
+    const r = z.rng.range(2.6, 3.4);
+    const at = t + BLAST_TELEGRAPH;
+    const ignite = z.rng.chance(0.5);
+    blasts.push({ x: p.x, z: p.z, r, t0: t, at, kind: 'gas', y: groundAt(p.x, p.z, t) });
+    if (ignite) spawnFire(z, t, { x: p.x, z: p.z, time: at });
+    return true;
+  }
+
   function fireOne(z, t) {
     const d = difficulty(t);
     const roll = z.rng.next();
@@ -491,6 +569,9 @@ export function createDisaster(world, opts = {}) {
       if (d > 0.25 && z.rng.chance(0.42 + d * 0.28)) fireOne(z, t);
       // Ground keeps splitting: extra narrow cracks, more often as it heats up
       if (z.rng.chance(0.12 + k * 0.55)) spawnFissure(z, t, 'crack');
+      // Fires at houses (never put out) and gas explosions at house fronts
+      if (t > 30 && z.rng.chance(0.04 + k * 0.12)) spawnFire(z, t);
+      if (t > 20 && z.rng.chance(0.03 + k * 0.1)) spawnGasBlast(z, t);
       // Debris rain: extra falling objects, more as the intensity climbs
       if (z.rng.chance(0.2 + k * 0.6)) spawnDrops(z, t, 1 + (k > 0.6 && z.rng.chance(0.5) ? 1 : 0));
       z.next = t + scheduleGap(z, t);
@@ -580,10 +661,8 @@ export function createDisaster(world, opts = {}) {
     geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     geo.setIndex(indices);
     geo.computeVertexNormals();
-    const walls = new THREE.Mesh(geo, pitMat);
-    walls.castShadow = true;
-    walls.receiveShadow = true;
-    g.add(walls);
+    // walls + floor + floor rubble share one vertex-coloured mesh
+    const pitParts = [{ geometry: geo }];
 
     // Floor: near-black, sealed to the bottom ring
     const last = rings[rings.length - 1];
@@ -595,9 +674,7 @@ export function createDisaster(world, opts = {}) {
     }
     const floorGeo = new THREE.ShapeGeometry(floorShape);
     floorGeo.rotateX(-Math.PI / 2);
-    const floor = new THREE.Mesh(floorGeo, floorMat);
-    floor.position.y = -PIT_DEPTH + 0.02;
-    g.add(floor);
+    pitParts.push(part(floorGeo, 0x120d0e, 0, -PIT_DEPTH + 0.02, 0));
 
     // Rubble on the floor — gives the eye a parallax cue for depth
     const deep = [];
@@ -610,9 +687,15 @@ export function createDisaster(world, opts = {}) {
         new THREE.Quaternion().setFromEuler(new THREE.Euler(vr.range(-0.5, 0.5), vr.range(0, 3), vr.range(-0.5, 0.5))),
         new THREE.Vector3(1, 1, 1),
       );
-      deep.push({ geometry: new THREE.BoxGeometry(sz, sz * 0.6, sz * 0.8), matrix: m });
+      const bx = part(new THREE.BoxGeometry(sz, sz * 0.6, sz * 0.8), 0x2b2325);
+      bx.geometry.applyMatrix4(m);
+      pitParts.push(bx);
     }
-    g.add(new THREE.Mesh(bake(deep), deepRubbleMat));
+    void deep;
+    const pitMesh = new THREE.Mesh(bake(pitParts), pitMat);
+    pitMesh.castShadow = true;
+    pitMesh.receiveShadow = true;
+    g.add(pitMesh);
 
     // Broken crust: paving slabs heaved up around the lip, overhanging the void
     const crust = { road: [], walk: [] };
@@ -643,9 +726,17 @@ export function createDisaster(world, opts = {}) {
       (surfY > 0.12 ? crust.walk : crust.road).push({ geometry: new THREE.BoxGeometry(w, 0.08, dpt), matrix: m });
       void len;
     }
-    for (const [list, mat] of [[crust.road, crustRoad], [crust.walk, crustWalk]]) {
-      if (!list.length) continue;
-      const mesh = new THREE.Mesh(bake(list), mat);
+    // road + sidewalk crust slabs in one vertex-coloured mesh
+    const crustParts = [];
+    for (const [list, hex] of [[crust.road, PAL.road], [crust.walk, PAL.sidewalk]]) {
+      for (const c of list) {
+        const q = part(c.geometry, hex);
+        q.geometry.applyMatrix4(c.matrix);
+        crustParts.push(q);
+      }
+    }
+    if (crustParts.length) {
+      const mesh = new THREE.Mesh(bake(crustParts), crustVC);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       g.add(mesh);
@@ -841,6 +932,7 @@ export function createDisaster(world, opts = {}) {
       if (!containsOffset(shape, lp.x - f.x, lp.z - f.z, 1.08)) continue;
       lp.fallen = true;
       world.colliders = world.colliders.filter((c) => c.ref !== lp);
+      world.detachLoose?.(lp, !silent);
       if (silent) {
         lp.obj.visible = false;
       } else {
@@ -899,32 +991,123 @@ export function createDisaster(world, opts = {}) {
     roof: cel({ color: PAL.roofSlate, bands: 3, tint: 0x514b70 }),
     pot: cel({ color: PAL.clay, bands: 3, tint: 0x7a4060 }),
     leaf: cel({ color: PAL.leaf, bands: 3, tint: 0x5b6f8c }),
+    drum: cel({ color: 0xc8302a, bands: 3, tint: 0x7a4060 }),
+    drumBand: cel({ color: PAL.yellow, bands: 2, tint: 0x8f7050 }),
   };
 
-  function buildDropMesh(d) {
-    const s = d.s;
-    const g = new THREE.Group();
-    if (d.kind === 0) {
-      g.add(box(s, s * 0.75, s * 0.85, dropMats.concrete));
-      g.add(box(s * 0.5, s * 0.35, s * 0.5, dropMats.rubble, s * 0.2, s * 0.45, 0));
-    } else if (d.kind === 1) {
+  /**
+   * GPU-instanced pool: hundreds of long-lived objects in one draw call.
+   * Each user keeps a proxy Object3D (animated as before); its inner node's
+   * matrixWorld is copied into the instance slot every frame.
+   */
+  function makeInstancer(geo, mat, cap) {
+    const im = new THREE.InstancedMesh(geo, mat, cap);
+    im.count = 0;
+    im.frustumCulled = false;
+    im.castShadow = true;
+    im.receiveShadow = true;
+    world.add(im);
+    const free = [];
+    let top = 0;
+    const zero = new THREE.Matrix4().makeScale(0, 0, 0);
+    return {
+      alloc() {
+        const i = free.length ? free.pop() : (top < cap ? top++ : -1);
+        if (i >= 0) im.count = Math.max(im.count, i + 1);
+        return i;
+      },
+      set(i, m) {
+        if (i < 0) return;
+        im.setMatrixAt(i, m);
+        im.instanceMatrix.needsUpdate = true;
+      },
+      release(i) {
+        if (i < 0) return;
+        im.setMatrixAt(i, zero);
+        im.instanceMatrix.needsUpdate = true;
+        free.push(i);
+      },
+      reset() {
+        for (let i = 0; i < top; i++) im.setMatrixAt(i, zero);
+        im.instanceMatrix.needsUpdate = true;
+        free.length = 0;
+        top = 0;
+        im.count = 0;
+      },
+    };
+  }
+
+  // One vertex-coloured mesh per fallen object (they persist 90 s and there
+  // can be hundreds — a mesh per part blew the draw-call budget).
+  const dropVC = cel({ color: 0xffffff, vertexColors: true, bands: 3, tint: 0x4a4038 });
+  const _dc = new THREE.Color();
+  function part(geo, hex, x = 0, y = 0, z = 0) {
+    geo.translate(x, y, z);
+    _dc.setHex(hex);
+    const n = geo.attributes.position.count;
+    const col = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) col.set([_dc.r, _dc.g, _dc.b], i * 3);
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    return { geometry: geo };
+  }
+
+  /** Unit-size (s = 1) geometry per drop kind; baked once. */
+  function dropGeometry(kind) {
+    const s = 1;
+    const B = (w, h, dd, hex, x, y, z) => part(new THREE.BoxGeometry(w, h, dd), hex, x, y, z);
+    const C = (r, h, hex, y) => part(new THREE.CylinderGeometry(r, r, h, 14).toNonIndexed(), hex, 0, y, 0);
+    let parts;
+    if (kind === 0) {
+      parts = [B(s, s * 0.75, s * 0.85, PAL.concreteDark), B(s * 0.5, s * 0.35, s * 0.5, PAL.rubble, s * 0.2, s * 0.45, 0)];
+    } else if (kind === 1) {
       // air-con unit
-      g.add(box(s * 1.2, s * 0.75, s * 0.5, dropMats.white));
-      g.add(box(s * 0.5, s * 0.5, 0.04, dropMats.grille, -s * 0.22, 0, s * 0.26));
-    } else if (d.kind === 2) {
+      parts = [B(s * 1.2, s * 0.75, s * 0.5, PAL.wallWhite), B(s * 0.5, s * 0.5, 0.04, PAL.metalDark, -s * 0.22, 0, s * 0.26)];
+    } else if (kind === 2) {
       // roof tile stack
-      for (let i = 0; i < 4; i++) g.add(box(s * 1.1, s * 0.12, s * 0.7, dropMats.roof, 0, i * s * 0.14 - s * 0.2, (i % 2) * 0.05));
+      parts = [0, 1, 2, 3].map((i) => B(s * 1.1, s * 0.12, s * 0.7, PAL.roofSlate, 0, i * s * 0.14 - s * 0.2, (i % 2) * 0.05));
+    } else if (kind === 4) {
+      // hazard drum — blows up after landing
+      parts = [C(s * 0.42, s, 0xc8302a, 0), C(s * 0.44, s * 0.1, PAL.yellow, -0.25 * s), C(s * 0.44, s * 0.1, PAL.yellow, 0.25 * s)];
     } else {
       // planter pot
-      g.add(box(s * 0.8, s * 0.6, s * 0.8, dropMats.pot));
-      g.add(box(s * 0.65, s * 0.4, s * 0.65, dropMats.leaf, 0, s * 0.45, 0));
+      parts = [B(s * 0.8, s * 0.6, s * 0.8, PAL.clay), B(s * 0.65, s * 0.4, s * 0.65, PAL.leaf, 0, s * 0.45, 0)];
     }
-    g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    const geos = parts.map((q) => (q.geometry.index ? q.geometry.toNonIndexed() : q.geometry));
+    return bake(geos.map((geometry) => ({ geometry })));
+  }
+  const dropInst = [0, 1, 2, 3, 4].map((k) => makeInstancer(dropGeometry(k), dropVC, 700));
+  const chunkInst = makeInstancer(new THREE.BoxGeometry(1, 1, 1), rubbleMat, 1600);
+
+  /** Proxy transform for an instanced drop (outer = animated, inner = size). */
+  function buildDropMesh(d) {
+    const g = new THREE.Object3D();
+    const inner = new THREE.Object3D();
+    inner.scale.setScalar(d.s);
+    g.add(inner);
+    d.inner = inner;
+    d.slot = dropInst[d.kind].alloc();
     const vr = rngKit(d.seed);
     g.rotation.set(vr.range(0, 1), vr.range(0, 6), vr.range(0, 1));
     d.spin = new THREE.Vector3(vr.range(-5, 5), vr.range(-3, 3), vr.range(-5, 5));
-    world.add(g);
     return g;
+  }
+
+  function syncInstance(inst, slot, proxy, inner) {
+    if (slot < 0 || !proxy) return;
+    proxy.updateMatrixWorld(true);
+    inst.set(slot, inner.matrixWorld);
+  }
+
+  function releaseDrop(d) {
+    if (d.slot != null && d.slot >= 0) dropInst[d.kind].release(d.slot);
+    d.slot = -1;
+    d.mesh = null;
+  }
+
+  function releaseChunk(c) {
+    if (c.slot != null && c.slot >= 0) chunkInst.release(c.slot);
+    c.slot = -1;
+    c.mesh = null;
   }
 
   /* ---------------- collapses ---------------- */
@@ -1115,6 +1298,11 @@ export function createDisaster(world, opts = {}) {
     updateDrops(dt, player);
     updateDebris(dt, player);
     updateCars(dt, player);
+    updateFires(dt, player);
+    updateBlasts(dt, player);
+    for (const d of drops) if (d.mesh) syncInstance(dropInst[d.kind], d.slot, d.mesh, d.inner);
+    for (const c of debris) if (c.mesh) syncInstance(chunkInst, c.slot, c.mesh, c.inner);
+    fx.update(elapsed, dt);
     world.flushBlocks?.();
   }
 
@@ -1154,10 +1342,10 @@ export function createDisaster(world, opts = {}) {
     for (let i = drops.length - 1; i >= 0; i--) {
       const d = drops[i];
       if (elapsed < d.t0) continue;
-      const endAt = d.landAt + OBJECT_LIFE;
+      const endAt = d.endAt ?? (d.landAt + OBJECT_LIFE);
       if (elapsed > endAt) {
         disposeGroup(d.warn);
-        if (d.mesh) world.root.remove(d.mesh);
+        releaseDrop(d);
         removeSolid(d);
         drops.splice(i, 1);
         continue;
@@ -1228,10 +1416,16 @@ export function createDisaster(world, opts = {}) {
           d.mesh.position.y -= 9 * dt;
           removeSolid(d);
         }
-        // sink away during the last second
-        const rem = endAt - elapsed;
-        if (rem < 1) d.mesh.position.y = Math.min(d.mesh.position.y, d.restY - (1 - rem) * 1.0);
-        if (rem < 1) removeSolid(d);
+        if (d.kind === 4) {
+          // fuse: the drum shudders faster and faster
+          const left = endAt - elapsed;
+          d.mesh.position.y = d.restY + Math.abs(Math.sin(elapsed * (30 + 40 / Math.max(0.2, left)))) * 0.05;
+        } else {
+          // sink away during the last second
+          const rem = endAt - elapsed;
+          if (rem < 1) d.mesh.position.y = Math.min(d.mesh.position.y, d.restY - (1 - rem) * 1.0);
+          if (rem < 1) removeSolid(d);
+        }
       }
     }
   }
@@ -1271,7 +1465,14 @@ export function createDisaster(world, opts = {}) {
     const colors = [PAL.red, PAL.blue, PAL.taxiYellow, PAL.teal, PAL.orange];
     const ry = c.alongX ? (c.dir > 0 ? 0 : Math.PI) : (c.dir > 0 ? -Math.PI / 2 : Math.PI / 2);
     const o = { x: c.x0, y: 0.1, z: c.z0, ry, color: colors[c.id % colors.length], hero: false };
-    const mesh = c.kind === 0 ? makeSedan(o) : c.kind === 1 ? makeVan(o) : makeKeiTruck(o);
+    const parts = c.kind === 0 ? makeSedan(o) : c.kind === 1 ? makeVan(o) : makeKeiTruck(o);
+    // merge the car's parts per material (wrecks linger 90 s)
+    parts.position.set(0, 0, 0);
+    parts.rotation.set(0, 0, 0);
+    const mesh = new THREE.Group();
+    mergeStatic([parts], mesh);
+    mesh.position.set(o.x, o.y, o.z);
+    mesh.rotation.y = ry;
     world.add(mesh);
     return mesh;
   }
@@ -1369,6 +1570,110 @@ export function createDisaster(world, opts = {}) {
     }
   }
 
+  function warnRing(x, z, r, color, y) {
+    const g = new THREE.Group();
+    g.position.set(x, y + 0.03, z);
+    const fill = new THREE.Mesh(new THREE.CircleGeometry(r, 40), decal(color, 0.12));
+    const edge = new THREE.Mesh(new THREE.RingGeometry(r * 0.93, r, 48), decal(color, 0.8));
+    const closing = new THREE.Mesh(new THREE.RingGeometry(r * 0.92, r, 48), decal(color, 0.55));
+    for (const m of [fill, edge, closing]) { m.rotation.x = -Math.PI / 2; m.renderOrder = 4; g.add(m); }
+    edge.position.y = 0.004;
+    closing.position.y = 0.006;
+    g.userData = { fill, edge, closing };
+    world.add(g);
+    return g;
+  }
+
+  function animateRing(g, u) {
+    const ud = g.userData;
+    ud.fill.material.opacity = 0.1 + 0.25 * u;
+    ud.edge.material.opacity = 0.5 + 0.4 * Math.sin(elapsed * 16);
+    const k = 1.8 - 0.8 * u;
+    ud.closing.scale.set(k, k, 1);
+  }
+
+  function fireRadius(f) {
+    return f.r * (1 + Math.min(0.45, (elapsed - f.igniteAt) / 260));
+  }
+
+  function updateFires(dt, player) {
+    let nearest = Infinity;
+    const lit = [];
+    for (const f of fireEnts) {
+      if (elapsed < f.t0) continue;
+      if (!f.fx) {
+        const gy = surfVis(f.x, f.z);
+        f.fx = fx.addFire(f.x, f.z, f.r, f.igniteAt, rngKit(hash(seed, 13000 + f.id)), gy);
+        f.gy = gy;
+      }
+      if (elapsed < f.igniteAt) {
+        if (f.warned && !f.sign && elapsed < f.igniteAt - 0.05) {
+          f.sign = fx.makeSign('fire', f.x, f.z, f.gy + 2.4);
+          f.ring = warnRing(f.x, f.z, f.r, PAL.orange, f.gy);
+          notify(f.x, f.z, 'Fire!', 0.05);
+        }
+        if (f.sign) {
+          fx.updateSign(f.sign, elapsed);
+          animateRing(f.ring, Math.min(1, (elapsed - f.t0) / FIRE_TELEGRAPH));
+        }
+        continue;
+      }
+      if (f.sign || f.ring) {
+        fx.removeSign(f.sign);
+        disposeGroup(f.ring);
+        f.sign = null;
+        f.ring = null;
+      }
+      if (!f.lit) {
+        f.lit = true;
+        if (elapsed - f.igniteAt < STALE) sfx('fire_ignite', f.x, f.z, 1);
+      }
+      lit.push({ x: f.x, z: f.z, r: fireRadius(f) });
+      if (player?.pos) {
+        const dx = player.pos.x - f.x;
+        const dz = player.pos.z - f.z;
+        const d = Math.hypot(dx, dz);
+        nearest = Math.min(nearest, d - fireRadius(f));
+        if (player.alive && d < fireRadius(f) * 0.85 && player.pos.y < f.gy + 1.6) {
+          const l = d || 1;
+          player.takeHit('fire', { kx: (dx / l) * 6, kz: (dz / l) * 6, shake: 0.9 });
+        }
+      }
+    }
+    world.fireMarks = lit;
+    world.onFireNear?.(nearest);
+  }
+
+  function updateBlasts(dt, player) {
+    for (let i = blasts.length - 1; i >= 0; i--) {
+      const b = blasts[i];
+      if (elapsed < b.t0) continue;
+      if (elapsed < b.at) {
+        if (!b.sign && elapsed < b.at - 0.05) {
+          b.sign = fx.makeSign('blast', b.x, b.z, (b.y || 0.1) + 2.2);
+          b.ring = warnRing(b.x, b.z, b.r, PAL.danger, b.y || 0.1);
+          notify(b.x, b.z, b.kind === 'gas' ? 'Gas leak — explosion!' : 'Hazard drum — it will blow!', 0.08);
+        }
+        if (b.sign) {
+          fx.updateSign(b.sign, elapsed);
+          const span = b.kind === 'gas' ? BLAST_TELEGRAPH : BOMB_FUSE;
+          animateRing(b.ring, Math.min(1, 1 - (b.at - elapsed) / span));
+        }
+        continue;
+      }
+      fx.removeSign(b.sign);
+      disposeGroup(b.ring);
+      blasts.splice(i, 1);
+      if (elapsed - b.at > STALE) continue; // long past (late join): no boom
+      fx.fireball(b.x, b.z, b.r, b.y || 0.1);
+      world.juice?.burstDust(b.x, (b.y || 0.1) + 0.6, b.z, 26, 1.6);
+      world.juice?.impactRing(b.x, b.z, PAL.orange);
+      notify(b.x, b.z, null, 0.95);
+      sfx('explosion', b.x, b.z, 1);
+      world.collapseZones.push({ kind: 'blast', cx: b.x, cz: b.z, r: b.r, life: 0.22, reason: 'explosion' });
+    }
+  }
+
   /** Collapse rubble: closed-form flight from collapse time, then solid. */
   function updateDebris(dt, player) {
     const pos = player?.pos;
@@ -1377,17 +1682,18 @@ export function createDisaster(world, opts = {}) {
       const age = elapsed - c.T;
       const endAt = c.tLand + OBJECT_LIFE;
       if (age > endAt || (!c.settles && age > c.tLand)) {
-        if (c.mesh) world.root.remove(c.mesh);
+        releaseChunk(c);
         removeSolid(c);
         debris.splice(i, 1);
         continue;
       }
       if (!c.mesh) {
-        c.mesh = box(c.s, c.s * 0.7, c.s * 0.8, rubbleMat);
-        c.mesh.castShadow = true;
-        c.mesh.receiveShadow = true;
+        c.mesh = new THREE.Object3D();
+        c.inner = new THREE.Object3D();
+        c.inner.scale.set(c.s, c.s * 0.7, c.s * 0.8);
+        c.mesh.add(c.inner);
+        c.slot = chunkInst.alloc();
         c.mesh.rotation.copy(c.rot);
-        world.add(c.mesh);
       }
       if (age < c.tLand) {
         c.mesh.position.set(
@@ -1457,10 +1763,16 @@ export function createDisaster(world, opts = {}) {
 
   function reset() {
     for (const f of fissures) { disposeGroup(f.warn); disposeGroup(f.pit); }
-    for (const d of drops) { disposeGroup(d.warn); if (d.mesh) world.root.remove(d.mesh); removeSolid(d); }
-    for (const d of debris) { if (d.mesh) world.root.remove(d.mesh); removeSolid(d); }
+    for (const d of drops) { disposeGroup(d.warn); releaseDrop(d); removeSolid(d); }
+    for (const d of debris) { releaseChunk(d); removeSolid(d); }
+    for (const inst of [...dropInst, chunkInst]) inst.reset();
     for (const c of cars) { disposeGroup(c.warn); if (c.mesh) world.root.remove(c.mesh); removeSolid(c); }
     for (const b of world.buildings) { disposeGroup(b.blastWarn); b.blastWarn = null; }
+    for (const f of fireEnts) { fx.removeSign(f.sign); disposeGroup(f.ring); }
+    for (const b of blasts) { fx.removeSign(b.sign); disposeGroup(b.ring); }
+    fireEnts.length = 0;
+    blasts.length = 0;
+    fx.reset();
     cars.length = 0;
     fissures.length = 0;
     drops.length = 0;
@@ -1482,6 +1794,22 @@ export function createDisaster(world, opts = {}) {
       queueFissure(shape, x, z, elapsed, ++debugSeq, -1);
       return { x, z, kind: shape.kind };
     };
+    /** Debug: fire / gas blast at the house nearest (x, z). */
+    window.__aftershockSpawnFire = (x = listener.x, z = listener.z) => {
+      const zone = zones.find((zz) => zz.inRegion(x, z)) || zones[0];
+      return spawnFire({ ...zone, rng: debugRng, buildings: nearestBuildings(x, z) }, elapsed);
+    };
+    window.__aftershockSpawnBlast = (x = listener.x, z = listener.z) => {
+      const zone = zones.find((zz) => zz.inRegion(x, z)) || zones[0];
+      return spawnGasBlast({ ...zone, rng: debugRng, buildings: nearestBuildings(x, z) }, elapsed);
+    };
+    function nearestBuildings(x, z) {
+      return [...world.buildings].sort((a, b) => {
+        const da = Math.hypot((a.footprint.x0 + a.footprint.x1) / 2 - x, (a.footprint.z0 + a.footprint.z1) / 2 - z);
+        const db = Math.hypot((b.footprint.x0 + b.footprint.x1) / 2 - x, (b.footprint.z0 + b.footprint.z1) / 2 - z);
+        return da - db;
+      }).slice(0, 1);
+    }
     /** Debug: launch a runaway car somewhere in the zone containing (x, z). */
     window.__aftershockSpawnCar = (x = listener.x, z = listener.z) => {
       const zone = zones.find((zz) => zz.inRegion(x, z)) || zones[0];
@@ -1516,6 +1844,8 @@ export function createDisaster(world, opts = {}) {
     /** Current quake intensity on the shared clock + shindo (1–7) for the HUD. */
     get intensity() { return intensity(elapsed); },
     get shindo() { return shindo(elapsed); },
+    get fireCount() { return fireEnts.filter((f) => f.lit).length; },
+    get blastCount() { return blasts.length; },
     /** Debug: where hazards landed (event log) and the rubble heaps. */
     get debugSpots() {
       return {

@@ -65,6 +65,31 @@ export function buildWorld(scene, opts = {}) {
     holder.updateMatrixWorld(true);
     mergeStatic(kids, holder);
   }
+  // Street clutter batched per 40 m cell (one mesh per material per cell);
+  // a prop that tumbles into a fissure is pulled out and its cell rebuilt.
+  const propCells = new Map();
+  for (const lp of ctx.looseProps || []) {
+    const key = `${Math.floor(lp.x / 40)},${Math.floor(lp.z / 40)}`;
+    if (!propCells.has(key)) propCells.set(key, { props: [], batch: null, dirty: true });
+    const cell = propCells.get(key);
+    cell.props.push(lp);
+    lp.cell = cell;
+    root.remove(lp.obj);
+  }
+  const rebuildCell = (cell) => {
+    if (cell.batch) {
+      root.remove(cell.batch);
+      cell.batch.traverse((o) => { if (o.isMesh) o.geometry.dispose(); });
+    }
+    const g = new THREE.Group();
+    g.name = 'props';
+    const standing = cell.props.filter((lp) => !lp.fallen);
+    if (standing.length) mergeStatic(standing.map((lp) => lp.obj), g, { keep: true });
+    root.add(g);
+    cell.batch = g;
+    cell.dirty = false;
+  };
+  for (const cell of propCells.values()) rebuildCell(cell);
   for (const block of ctx.blocks) rebuildBlock(block, root);
   // Loose clutter is solid but must not stop fissures (it tumbles in instead)
   const staticColliders = colliders.filter((c) => !c.ref?.loose);
@@ -159,6 +184,12 @@ export function buildWorld(scene, opts = {}) {
     /** Rebuild any block batches invalidated this frame. */
     flushBlocks() {
       for (const block of ctx.blocks) if (block.dirty) rebuildBlock(block, root);
+      for (const cell of propCells.values()) if (cell.dirty) rebuildCell(cell);
+    },
+    /** Pull a fallen prop out of its cell batch (optionally to animate it). */
+    detachLoose(lp, animate) {
+      if (lp.cell) lp.cell.dirty = true;
+      if (animate) root.add(lp.obj);
     },
   };
 

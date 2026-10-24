@@ -74,6 +74,7 @@ let roomSeed = WORLD_SEED;
 let roundEndsAt = null;
 let roundMode = 'versus';
 let lastShindoSeen = 0;
+let fireNear = Infinity;
 let aliveSince = performance.now();
 /** serverNow − Date.now(), best (lowest-latency) estimate. */
 let clockOffset = null;
@@ -526,6 +527,7 @@ function wireWorld(w) {
   };
   w.onFlash = (msg) => hud.flash(msg);
   w.onSfx = (name, x, z, vol) => sfx.play(name, x, z, vol);
+  w.onFireNear = (d) => { fireNear = d; };
 }
 wireWorld(world);
 
@@ -875,6 +877,7 @@ function frame() {
     sfx.setListener({ x: at.x, z: at.z, rx: -_look.z / rlen, rz: _look.x / rlen, range: 1 });
   }
   sfx.setRumble(running ? lightPulse * 1.3 : 0, dt);
+  sfx.setFireNear(running ? fireNear : Infinity, dt);
   minimap.setVisible(phase === 'playing' || phase === 'spectate');
   minimap.update(dt, {
     world,

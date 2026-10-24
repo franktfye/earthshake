@@ -29,7 +29,7 @@ export function createJuice(world) {
   const flashes = [];
   // Late game fires dozens of bursts a second: share geometry, cap the pool,
   // thin bursts when the air is already full, and keep dust off the lens.
-  const MAX_DUST = 140;
+  const MAX_DUST = 70;
   const MAX_FLASH = 36;
   const CAM_CLEAR = 4.5;
   const dustGeo = new THREE.SphereGeometry(1, 6, 5);

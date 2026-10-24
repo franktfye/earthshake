@@ -79,6 +79,14 @@ survivors.
   footprint (~2.7 m for 1 floor → ~5.3 m for 3 floors), shown as a red
   rounded zone with a closing ring during the 1.1–1.5 s telegraph, and
   throws them outward.
+- **Fire** ignites at houses (their frontage, or the rubble once they've
+  fallen) and **never goes out**; standing in it costs a life. Warned by a
+  floating ⚠ flame sign + orange ring (1.6 s). Up to 2 → 8 per zone as the
+  intensity rises; orange dots on the minimap; crackle bed near flames.
+- **Explosions**: gas leaks at house fronts (⚠ blast sign + red radius,
+  1.7 s; half of them also start a fire) and red hazard drums that fall with
+  the debris and blow up 2.4 s after landing (sign + radius during the fuse).
+  A blast hits and throws everyone in its 2.6–3.4 m radius.
 - Runaway cars hit anything they sweep over along the whole lane (swept test,
   so fast cars or slow frames can't skip you), fishtail as they slide, and the
   crash itself hits within 2.2 m.
@@ -134,7 +142,8 @@ Fissures share one analytic outline (`src/world/fissureShape.js`) between the
 ground-cut shader (`holePunch.js`), the 6.5 m shaft mesh, the warning decal
 and the kill test. Debug hooks: `__aftershockSpawnFissure(x, z, kind)`,
 `__aftershockSpawnDrop(x, z)`, `__aftershockSpawnCar(x, z)`,
-`__aftershockCollapseNear(x, z)`, `window.__aftershock`.
+`__aftershockCollapseNear(x, z)`, `__aftershockSpawnFire(x, z)`,
+`__aftershockSpawnBlast(x, z)`, `window.__aftershock`.
 
 ## Audio
 

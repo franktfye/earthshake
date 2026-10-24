@@ -11,6 +11,7 @@ const FILES = [
   'impact_concrete', 'impact_metal', 'impact_tiles', 'impact_pot',
   'collapse', 'creak', 'hurt', 'fall',
   'horn', 'car_rush', 'car_crash',
+  'explosion', 'fire_ignite', 'fire_loop',
 ];
 /** Per-sound base gain + audible radius (m). */
 const MIX = {
@@ -28,6 +29,8 @@ const MIX = {
   horn: [0.85, 40],
   car_rush: [0.9, 30],
   car_crash: [1.0, 45],
+  explosion: [1.0, 60],
+  fire_ignite: [0.8, 30],
 };
 const MAX_VOICES = 3;
 
@@ -40,6 +43,8 @@ export function createSfx() {
   const listener = { x: 0, z: 0, rx: 1, rz: 0, range: 1 };
   let rumble = null;
   let rumbleLevel = 0;
+  let fireBed = null;
+  let fireLevel = 0;
 
   function unlock() {
     if (!ctx) {
@@ -65,6 +70,28 @@ export function createSfx() {
     }));
     if (typeof window !== 'undefined') window.__aftershockSfxLoaded = [...buffers.keys()];
     startRumble();
+    startFireBed();
+  }
+
+  function startFireBed() {
+    const buf = buffers.get('fire_loop');
+    if (!buf || fireBed) return;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    src.connect(gain).connect(master);
+    src.start();
+    fireBed = { src, gain };
+  }
+
+  /** Crackle bed follows the distance (m) to the nearest burning fire. */
+  function setFireNear(dist, dt) {
+    if (!fireBed) return;
+    const target = Number.isFinite(dist) ? Math.max(0, 1 - Math.max(0, dist) / 16) ** 1.5 : 0;
+    fireLevel += (target - fireLevel) * Math.min(1, dt * 3);
+    fireBed.gain.gain.value = muted ? 0 : fireLevel * 0.85;
   }
 
   function startRumble() {
@@ -142,5 +169,5 @@ export function createSfx() {
     if (master) master.gain.value = muted ? 0 : 0.9;
   }
 
-  return { unlock, play, setListener, setRumble, setMuted };
+  return { unlock, play, setListener, setRumble, setFireNear, setMuted };
 }
