@@ -61,10 +61,14 @@ survivors.
 - Telegraphs (1 s): a closing red target ring + growing shadow for falling
   objects, the exact red outline for fissures, creaking + shaking for houses,
   honk + red lane chevrons (1.2 s) for runaway cars.
-- Fissures: `pit`, `chasm` and narrow `crack`; up to 6 open per zone, 60 s
-  each — late game keeps ~30 open map-wide.
+- Hazard rate is doubled (`HAZARD_RATE` in `src/world/disaster.js`): late
+  game runs ~50 open fissures, ~260 fallen objects, 11–16 runaway cars and
+  ~145 collapsed houses by 80 s.
+- Fissures: `pit`, `chasm` and narrow `crack`; up to 12 open per zone (64
+  map-wide, packed in a data texture for the ground-cut shader), 60 s each.
 - Fallen objects, collapse rubble and car wrecks stay **solid for 35 s** (max
-  26 per zone); a fissure opening under them swallows them.
+  52 per zone); a fissure opening under them swallows them. Collapses throw
+  twice the rubble and spill twice the falling objects into the street.
 - Players, street clutter (bins, planters, bikes, cones), parked cars and
   wrecks are solid.
 

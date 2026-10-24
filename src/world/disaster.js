@@ -35,15 +35,17 @@ const HOLE_CLOSE = 0.7;
 const PIT_DEPTH = 6.5;
 const FALL_HEIGHT = 14;
 const FALL_SPEED = 22;
-const ZONE_HOLE_CAP = 6;
+const ZONE_HOLE_CAP = 12;
 /** Walkable area of the old single-cross map — hazard density reference. */
 const REF_AREA = 1240;
 const NOTIFY_RADIUS = 28;
 const STALE = 1.2;
+/** Global hazard multiplier: every damage source fires this many times as often. */
+const HAZARD_RATE = 2;
 /** Fallen objects / settled rubble stay on the street (and stay solid) this long. */
 const OBJECT_LIFE = 35;
 /** Max objects lying in / falling onto one zone at once (keeps streets passable). */
-const ZONE_OBJECT_CAP = 26;
+const ZONE_OBJECT_CAP = 52;
 const GRAVITY = 14;
 /** Runaway car: honk + lane warning, then it tears down the street. */
 const CAR_TELEGRAPH = 1.2;
@@ -158,7 +160,7 @@ export function createDisaster(world, opts = {}) {
   /* ---------------- scheduling ---------------- */
   function scheduleGap(z, t) {
     const d = difficulty(t);
-    return (Math.max(1.35, 6.5 - d * 4.5) + z.rng.range(0, 1.6)) * z.gapScale;
+    return (Math.max(1.35, 6.5 - d * 4.5) + z.rng.range(0, 1.6)) * z.gapScale / HAZARD_RATE;
   }
 
   function spawnFissure(z, t, kind) {
@@ -267,7 +269,7 @@ export function createDisaster(world, opts = {}) {
     const halfWidth = dir[0] ? (fp.z1 - fp.z0) / 2 : (fp.x1 - fp.x0) / 2;
     b.front = { x: cx + dir[0] * halfDepth, z: cz + dir[1] * halfDepth, dir, spread: halfWidth };
     // Facade chunks rain onto the street in front, timed with the fall
-    spawnDrops(z, t + b.telegraph * 0.4, 1 + (difficulty(t) > 0.5 ? 1 : 0), b.front);
+    spawnDrops(z, t + b.telegraph * 0.4, (1 + (difficulty(t) > 0.5 ? 1 : 0)) * HAZARD_RATE, b.front);
     b.chunks = planCollapseChunks(b, t + b.telegraph);
     b.creaked = false;
     if (t > elapsed - STALE) notify(cx, cz, 'Building giving way!', 0.25);
@@ -285,7 +287,7 @@ export function createDisaster(world, opts = {}) {
     const dir = FACE_DIR[b.face] || [0, 1];
     const cx = (fp.x0 + fp.x1) / 2;
     const cz = (fp.z0 + fp.z1) / 2;
-    const n = b.collapseType === 'pancake' ? 9 : 6;
+    const n = (b.collapseType === 'pancake' ? 9 : 6) * HAZARD_RATE;
     const speed = b.collapseType === 'facade' ? 9 : 6.5;
     const chunks = [];
     for (let i = 0; i < n; i++) {
@@ -344,7 +346,7 @@ export function createDisaster(world, opts = {}) {
    */
   function spawnCar(z, t) {
     if (!z.roads?.length) return false;
-    for (let tries = 0; tries < 8; tries++) {
+    for (let tries = 0; tries < 16; tries++) {
       const seg = z.roads[z.rng.int(0, z.roads.length - 1)];
       const dir = z.rng.chance(0.5) ? 1 : -1;
       const s0 = z.rng.range(seg.lo + 2, seg.hi - 2);
@@ -369,7 +371,7 @@ export function createDisaster(world, opts = {}) {
         if (activeHoles(tt).some((h) => Math.hypot(h.x - front.x, h.z - front.z) < h.r * 0.8)) break;
         travel = nxt;
       }
-      if (travel < 8) continue;
+      if (travel < 5) continue;
       const stopAt = goAt + travel / speed;
       const end = pos(s0 + dir * travel);
       const id = ++carSeq;
@@ -395,7 +397,7 @@ export function createDisaster(world, opts = {}) {
     }
     if (roll < 0.38) return spawnDrops(z, t, 1 + (d > 0.4 && z.rng.chance(0.6) ? 1 : 0));
     if (roll < 0.6) return spawnFissure(z, t) || spawnDrops(z, t, 1);
-    if (roll < 0.74) return spawnCar(z, t) || spawnDrops(z, t, 1);
+    if (roll < 0.74) return spawnCar(z, t) || spawnCar(z, t) || spawnDrops(z, t, 1);
     return startCollapse(z, t) || spawnDrops(z, t, 1);
   }
 

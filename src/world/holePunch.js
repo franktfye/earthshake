@@ -8,17 +8,19 @@ import * as THREE from 'three';
  * Outline (shape-local, before rotation):
  *   p(t) = ( cos t · R(t) · rx , sin t · R(t) · rz )
  *   R(t) = baseR · scale · (1 + a1 sin(k1 t + p1) + a2 sin(k2 t + p2))
- * Packed per hole:
+ * Packed per hole as 3 RGBA float texels of one row in a data texture
+ * (uniform arrays would blow the mobile uniform budget at this count):
  *   A = (x, z, baseR·scale, rot)   B = (rx, rz, a1, k1)   C = (p1, a2, k2, p2)
  */
-export const MAX_HOLES = 32;
-const holeA = Array.from({ length: MAX_HOLES }, () => new THREE.Vector4());
-const holeB = Array.from({ length: MAX_HOLES }, () => new THREE.Vector4(1, 1, 0, 0));
-const holeC = Array.from({ length: MAX_HOLES }, () => new THREE.Vector4());
+export const MAX_HOLES = 64;
+const holeData = new Float32Array(3 * MAX_HOLES * 4);
+const holeTex = new THREE.DataTexture(holeData, 3, MAX_HOLES, THREE.RGBAFormat, THREE.FloatType);
+holeTex.minFilter = THREE.NearestFilter;
+holeTex.magFilter = THREE.NearestFilter;
+holeTex.generateMipmaps = false;
+holeTex.needsUpdate = true;
 const uHoleCount = { value: 0 };
-const uHoleA = { value: holeA };
-const uHoleB = { value: holeB };
-const uHoleC = { value: holeC };
+const uHoleTex = { value: holeTex };
 const patched = new WeakSet();
 
 /** @param {Array<{x:number,z:number,shape:object,scale:number}>} list */
@@ -27,10 +29,13 @@ export function setHolePunches(list) {
   uHoleCount.value = n;
   for (let i = 0; i < n; i++) {
     const { x, z, shape: s, scale = 1 } = list[i];
-    holeA[i].set(x, z, s.baseR * scale, s.rot);
-    holeB[i].set(s.rx, s.rz, s.a1, s.k1);
-    holeC[i].set(s.p1, s.a2, s.k2, s.p2);
+    holeData.set([
+      x, z, s.baseR * scale, s.rot,
+      s.rx, s.rz, s.a1, s.k1,
+      s.p1, s.a2, s.k2, s.p2,
+    ], i * 12);
   }
+  holeTex.needsUpdate = true;
 }
 
 export function clearHolePunches() {
@@ -50,9 +55,7 @@ export function patchGroundMaterial(mat) {
   mat.onBeforeCompile = (shader, renderer) => {
     prevCompile(shader, renderer);
     shader.uniforms.uHoleCount = uHoleCount;
-    shader.uniforms.uHoleA = uHoleA;
-    shader.uniforms.uHoleB = uHoleB;
-    shader.uniforms.uHoleC = uHoleC;
+    shader.uniforms.uHoleTex = uHoleTex;
 
     shader.vertexShader = `varying vec3 vHoleWorldPos;\n` + shader.vertexShader.replace(
       '#include <project_vertex>',
@@ -62,17 +65,15 @@ export function patchGroundMaterial(mat) {
     shader.fragmentShader = `
       varying vec3 vHoleWorldPos;
       uniform int uHoleCount;
-      uniform vec4 uHoleA[${MAX_HOLES}];
-      uniform vec4 uHoleB[${MAX_HOLES}];
-      uniform vec4 uHoleC[${MAX_HOLES}];
+      uniform highp sampler2D uHoleTex;
     ` + shader.fragmentShader.replace(
       '#include <clipping_planes_fragment>',
       `#include <clipping_planes_fragment>
       for (int i = 0; i < ${MAX_HOLES}; i++) {
         if (i >= uHoleCount) break;
-        vec4 A = uHoleA[i];
-        vec4 B = uHoleB[i];
-        vec4 C = uHoleC[i];
+        vec4 A = texelFetch(uHoleTex, ivec2(0, i), 0);
+        vec4 B = texelFetch(uHoleTex, ivec2(1, i), 0);
+        vec4 C = texelFetch(uHoleTex, ivec2(2, i), 0);
         vec2 d = vHoleWorldPos.xz - A.xy;
         float lim = A.z * (1.0 + abs(B.z) + abs(C.y)) * max(B.x, B.y);
         if (dot(d, d) > lim * lim) continue;
@@ -86,7 +87,7 @@ export function patchGroundMaterial(mat) {
     );
   };
 
-  mat.customProgramCacheKey = () => `${prevKey?.() || 'mat'}|holePunchV2`;
+  mat.customProgramCacheKey = () => `${prevKey?.() || 'mat'}|holePunchV3`;
   mat.needsUpdate = true;
   return mat;
 }
