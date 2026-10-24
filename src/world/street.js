@@ -13,7 +13,8 @@ export const FRONT_APRON = 0.25;
 /** Map half-extent — 120 m square, sized for a 30-player room. */
 export const MAP = { half: 60 };
 /** Open civic plaza over the central crossing. */
-export const PLAZA = { half: 8.5, top: 0.12 };
+/** Small paved square over the central crossing (spawn area — not a safe zone). */
+export const PLAZA = { half: 6, top: 0.12 };
 
 export const LOT_TOP = 0.06;
 export const ROAD_TOP = 0.1;
@@ -205,15 +206,15 @@ export function buildStreet(ctx) {
     addSlab(ctx, { x0, x1, z0, z1 }, PLAZA.top, PLAZA.top + 0.005, m.plazaInlay);
   }
   // Clock monument — a landmark to navigate by (blocks hazards at the centre)
-  const base = box(2.6, 0.5, 2.6, m.monument, 0, 0.25, 0);
-  const shaft = box(0.9, 4.6, 0.9, m.monument, 0, 2.8, 0);
-  const head = box(1.5, 1.5, 1.5, m.clock, 0, 5.6, 0);
+  const base = box(1.6, 0.45, 1.6, m.monument, 0, 0.22, 0);
+  const shaft = box(0.6, 4.2, 0.6, m.monument, 0, 2.5, 0);
+  const head = box(1.1, 1.1, 1.1, m.clock, 0, 5.1, 0);
   for (const o of [base, shaft, head]) {
     o.castShadow = true;
     o.receiveShadow = true;
     ctx.add(o);
   }
-  ctx.collide(-1.3, -1.3, 1.3, 1.3, 6.5);
+  ctx.collide(-0.8, -0.8, 0.8, 0.8, 6.0);
 
   // Perimeter wall
   const wallH = 2.8;
@@ -268,7 +269,7 @@ export function spawnPoints() {
   }
   for (let i = 0; i < 6; i++) {
     const a = (i / 6) * Math.PI * 2 + 0.4;
-    pts.push({ x: Math.cos(a) * 5.4, z: Math.sin(a) * 5.4, yaw: Math.atan2(Math.cos(a), Math.sin(a)) });
+    pts.push({ x: Math.cos(a) * 3.6, z: Math.sin(a) * 3.6, yaw: Math.atan2(Math.cos(a), Math.sin(a)) });
   }
   // interleave: plaza first, then one per road quadrant round-robin
   const order = [24, 0, 10, 20, 7, 25, 3, 13, 17, 26, 5, 15, 22, 1, 27, 11, 18, 8, 28, 2, 14, 21, 6, 29, 4, 12, 19, 9, 16, 23];

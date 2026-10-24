@@ -439,11 +439,10 @@ export function buildStreetProps(ctx) {
   }
   makeWires(ctx, runs);
 
-  // Plaza planters around the edge
-  for (let i = 0; i < 8; i++) {
-    const ang = (i / 8) * Math.PI * 2 + Math.PI / 8;
-    const x = Math.cos(ang) * 7.2;
-    const z = Math.sin(ang) * 7.2;
+  // Plaza planters in the four corner pockets (off the crossing roads)
+  for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    const x = sx * 4.9;
+    const z = sz * 4.9;
     loose(makePlanter({ x, z, y: 0.12 }), x, z, 0.36, 0.36, 0.75);
   }
   void H;

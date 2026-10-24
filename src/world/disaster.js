@@ -92,7 +92,8 @@ export function createDisaster(world, opts = {}) {
     rng: rngKit(hash(seed, i + 1)),
     next: 5 + i * 0.55,
     index: 0,
-    gapScale: Math.min(1.6, Math.max(0.55, REF_AREA / Math.max(1, z.area))),
+    // small zones (the plaza) no longer get stretched-out, calmer spacing
+    gapScale: Math.min(1.0, Math.max(0.55, REF_AREA / Math.max(1, z.area))),
   }));
 
   /** Event-time logs — the only state placement decisions may read. */
