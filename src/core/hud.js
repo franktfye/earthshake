@@ -76,7 +76,32 @@ export function createHud() {
   const spectateBanner = el('div', 'spectate-banner', root, `
     <strong>Spectating</strong> · Waiting for round to end
   `);
-  const roundTimer = el('div', 'round-timer', root, '');
+  // Top-centre status strip: live survivors counter + solo round timer
+  const topCenter = el('div', 'top-center', root, '');
+  const aliveChip = el('div', 'alive-chip', topCenter, '');
+  const roundTimer = el('div', 'round-timer', topCenter, '');
+  const outFeed = el('div', 'out-feed', root, '');
+  /** Elimination feed under the counter (own slot — hazard toasts can't hide it). */
+  function feed(html) {
+    const row = el('div', 'out-row', outFeed, html);
+    while (outFeed.children.length > 4) outFeed.firstChild.remove();
+    setTimeout(() => row.classList.add('fade'), 3800);
+    setTimeout(() => row.remove(), 4500);
+  }
+  let lastAlive = null;
+  /** Live "N / M alive" counter; null hides it. */
+  function setAlive(alive, total) {
+    if (alive == null) { aliveChip.classList.remove('on'); lastAlive = null; return; }
+    aliveChip.innerHTML = `<span class="ac-dot"></span><b>${alive}</b>&thinsp;/&thinsp;${total} alive`;
+    aliveChip.classList.add('on');
+    aliveChip.classList.toggle('last', alive <= 1 && total > 1);
+    if (lastAlive != null && alive < lastAlive) {
+      aliveChip.classList.remove('drop');
+      void aliveChip.offsetWidth; // restart the pulse
+      aliveChip.classList.add('drop');
+    }
+    lastAlive = alive;
+  }
 
   const lobby = el('div', 'lobby-panel', root, `
     <div class="lobby-head">
@@ -550,6 +575,8 @@ export function createHud() {
     hideSpectate,
     showDead,
     showRoundEnd,
+    setAlive,
+    feed,
     setServerLoad,
     requestFullscreen,
     hideResults,

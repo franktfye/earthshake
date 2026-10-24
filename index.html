@@ -306,8 +306,35 @@
   .results-list li.is-me { box-shadow: inset 0 0 0 2px rgba(200, 72, 48, 0.5); }
   .results-foot { font-size: 12px; color: #8a7a68; text-align: center; }
 
-  .round-timer {
+  .top-center {
     position: absolute; left: 50%; top: 14px; transform: translateX(-50%);
+    display: flex; gap: 8px; align-items: center; pointer-events: none;
+  }
+  .alive-chip {
+    display: none; align-items: center; gap: 6px;
+    padding: 7px 14px; border-radius: 999px;
+    background: rgba(46, 42, 40, 0.82); color: #f4ece0;
+    font: 600 13px/1 inherit; font-variant-numeric: tabular-nums;
+  }
+  .alive-chip.on { display: inline-flex; }
+  .alive-chip b { font-size: 15px; font-weight: 800; }
+  .ac-dot { width: 8px; height: 8px; border-radius: 50%; background: #5fd06a; box-shadow: 0 0 6px #5fd06a; }
+  .alive-chip.last { background: #c84830; }
+  .alive-chip.last .ac-dot { background: #fff; box-shadow: 0 0 6px #fff; }
+  .alive-chip.drop { animation: alive-drop .7s ease; }
+  @keyframes alive-drop { 0% { transform: scale(1.25); background: #c84830; } 100% { transform: scale(1); } }
+  .out-feed {
+    position: absolute; left: 50%; top: 52px; transform: translateX(-50%);
+    display: flex; flex-direction: column; align-items: center; gap: 4px; pointer-events: none;
+  }
+  .out-row {
+    padding: 4px 11px; border-radius: 999px; font: 600 12px/1.3 inherit;
+    background: rgba(200, 72, 48, 0.88); color: #fff;
+    animation: out-in .25s ease; transition: opacity .6s ease;
+  }
+  .out-row.fade { opacity: 0; }
+  @keyframes out-in { from { opacity: 0; transform: translateY(-6px); } }
+  .round-timer {
     padding: 7px 14px; border-radius: 999px;
     background: rgba(244, 236, 224, 0.88); border: 1.5px solid rgba(46, 42, 40, 0.25);
     font: 700 13px/1 inherit; color: #2e2a28; font-variant-numeric: tabular-nums;
@@ -322,6 +349,8 @@
   @media (max-width: 720px) {
     .vitals { width: min(280px, calc(100vw - 150px)); }
     .spectate-banner { top: auto; bottom: 64px; font-size: 12px; }
+    .top-center { top: 62px; }
+    .out-feed { top: 100px; }
   }
   .spectate-banner {
     position: absolute; left: 50%; top: 14px; transform: translateX(-50%);

@@ -76,6 +76,10 @@ let roundEndsAt = null;
 let roundMode = 'versus';
 let lastShindoSeen = 0;
 let fireNear = Infinity;
+let aliveCount = null;
+let aliveTotal = 0;
+let lastLivingIds = null;
+const escapeHtml = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 let aliveSince = performance.now();
 /** serverNow − Date.now(), best (lowest-latency) estimate. */
 let clockOffset = null;
@@ -378,6 +382,8 @@ const net = createNetClient({
     }
   },
   onRoundStart(msg) {
+    lastLivingIds = null;
+    aliveCount = null;
     noteServerTime(msg.serverNow);
     roomStartedAt = msg.startedAt;
     roundEndsAt = msg.endsAt || null;
@@ -443,6 +449,21 @@ const net = createNetClient({
     noteServerTime(msg?.serverNow);
     remotes.applyStates(list, net.id);
     playerCount = list.length || playerCount;
+    // Live survivors among this round's runners (observers don't count)
+    const runners = list.filter((p) => p.inRound);
+    const livingNow = runners.filter((p) => p.alive !== false && (p.lives == null || p.lives > 0));
+    aliveCount = livingNow.length;
+    aliveTotal = runners.length;
+    if (phase === 'playing' || phase === 'spectate') hud.setAlive(aliveCount, aliveTotal);
+    const ids = new Set(livingNow.map((p) => p.id));
+    if (lastLivingIds && (phase === 'playing' || phase === 'spectate')) {
+      for (const id of lastLivingIds) {
+        if (ids.has(id) || id === net.id) continue;
+        const who = runners.find((p) => p.id === id);
+        if (who) hud.feed(`<b>${escapeHtml(who.name)}</b> is out — ${aliveCount} left`);
+      }
+    }
+    lastLivingIds = ids;
     // Hide dead remotes' bodies but keep nametags for living only
     for (const p of list) {
       if (p.id === net.id) continue;
@@ -880,6 +901,10 @@ function frame() {
   }
 
   remotes.tick(dt);
+  const inRound = phase === 'playing' || phase === 'spectate';
+  if (!inRound) hud.setAlive(null);
+  else if (onlineMode && aliveCount != null) hud.setAlive(aliveCount, aliveTotal);
+  else if (!onlineMode) hud.setAlive(player.alive ? 1 : 0, 1);
   hud.setRoundTimer(roundEndsAt && (phase === 'playing' || phase === 'spectate')
     ? (roundEndsAt - (onlineMode ? serverNowMs() : Date.now())) / 1000
     : null);

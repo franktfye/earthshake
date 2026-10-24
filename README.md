@@ -58,6 +58,10 @@ survivors.
 
 ## Rules & hazards
 
+- A live **survivors counter** (`N / M alive`, this round's runners only —
+  observers don't count) sits top-centre, pulses when someone drops and turns
+  red at the last one standing; an elimination feed under it announces
+  "<name> is out — N left".
 - 3 lives. Hit or fall → red screen flash (~2.5 s) and a life lost.
 - Sprint drains energy; at empty you drop to a walk until you release sprint
   and recover 25 %.
